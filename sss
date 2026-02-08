@@ -1,160 +1,126 @@
 --[[
 	WARNING: Heads up! This script has not been verified by ScriptBlox. Use at your own risk!
 ]]
--- [[ 1. THE EMERGENCY LOADER ]]
-local function ForceParent()
-    local success, target = pcall(function() return game:GetService("CoreGui") end)
-    if not success or not target then
-        success, target = pcall(function() return game:GetService("Players").LocalPlayer:WaitForChild("PlayerGui") end)
-    end
-    return target
-end
-
--- Destroy old versions if they exist to prevent "Ghost GUIs"
-for _, v in pairs(ForceParent():GetChildren()) do
-    if v.Name == "Gojo_Ninja_V4" then v:Destroy() end
-end
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local LocalPlayer = Players.LocalPlayer
+local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 
 local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "Gojo_Ninja_V4"
-ScreenGui.Parent = ForceParent()
+ScreenGui.Name = "MidnightUtility"
 ScreenGui.ResetOnSpawn = false
+ScreenGui.Parent = PlayerGui
 
--- [[ 2. MINIMIZE SYSTEM ]]
-local customImageID = "rbxassetid://18826457174" 
-
-local MaxBtn = Instance.new("ImageButton")
-MaxBtn.Size = UDim2.new(0, 60, 0, 60)
-MaxBtn.Position = UDim2.new(0.5, -30, 0, 10)
-MaxBtn.Image = customImageID
-MaxBtn.Visible = false
-MaxBtn.Parent = ScreenGui
-Instance.new("UIStroke", MaxBtn).Thickness = 2
-Instance.new("UICorner", MaxBtn).CornerRadius = UDim.new(0, 10)
-
--- [[ 3. MAIN FRAME ]]
 local MainFrame = Instance.new("Frame")
-MainFrame.Size = UDim2.new(0, 380, 0, 300)
-MainFrame.Position = UDim2.new(0.5, -190, 0.5, -150)
-MainFrame.BackgroundColor3 = Color3.fromRGB(15, 15, 22)
+MainFrame.Name = "MainFrame"
+MainFrame.Size = UDim2.new(0, 200, 0, 260)
+MainFrame.Position = UDim2.new(0.1, 0, 0.1, 0)
+MainFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+MainFrame.BorderSizePixel = 0
 MainFrame.Active = true
-MainFrame.Draggable = true 
+MainFrame.Draggable = true
 MainFrame.Parent = ScreenGui
 
-local MainStroke = Instance.new("UIStroke", MainFrame)
-MainStroke.Thickness = 3
-MainStroke.Color = Color3.fromRGB(80, 80, 150)
-Instance.new("UICorner", MainFrame)
+local UICorner = Instance.new("UICorner")
+UICorner.CornerRadius = UDim.new(0, 8)
+UICorner.Parent = MainFrame
 
--- Minimize Logic
-local MiniBtn = Instance.new("TextButton", MainFrame)
-MiniBtn.Size = UDim2.new(0, 30, 0, 30)
-MiniBtn.Position = UDim2.new(1, -35, 0, 5)
-MiniBtn.Text = "-"
-MiniBtn.BackgroundColor3 = Color3.fromRGB(40, 40, 60)
-MiniBtn.TextColor3 = Color3.new(1, 1, 1)
-Instance.new("UICorner", MiniBtn)
+local Header = Instance.new("TextLabel")
+Header.Size = UDim2.new(1, 0, 0, 30)
+Header.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+Header.Text = "NINJA LEGENDS OP"
+Header.TextColor3 = Color3.fromRGB(255, 255, 255)
+Header.TextSize = 14
+Header.Font = Enum.Font.GothamBold
+Header.Parent = MainFrame
 
-MiniBtn.MouseButton1Click:Connect(function()
-    MainFrame.Visible = false
-    MaxBtn.Visible = true
-end)
+local HeaderCorner = Instance.new("UICorner")
+HeaderCorner.Parent = Header
 
-MaxBtn.MouseButton1Click:Connect(function()
-    MainFrame.Visible = true
-    MaxBtn.Visible = false
-end)
+local CloseBtn = Instance.new("TextButton")
+CloseBtn.Size = UDim2.new(0, 25, 0, 25)
+CloseBtn.Position = UDim2.new(1, -30, 0, 2)
+CloseBtn.BackgroundTransparency = 1
+CloseBtn.Text = "X"
+CloseBtn.TextColor3 = Color3.fromRGB(255, 80, 80)
+CloseBtn.TextSize = 18
+CloseBtn.Parent = MainFrame
+CloseBtn.MouseButton1Click:Connect(function() ScreenGui:Destroy() end)
 
--- [[ 4. BUTTONS & UI ]]
-local function createToggle(name, parent, yPos, color)
-    local btn = Instance.new("TextButton", parent)
-    btn.Size = UDim2.new(1, 0, 0, 35)
-    btn.Position = UDim2.new(0, 0, 0, yPos)
-    btn.Text = name .. ": OFF"
-    btn.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
-    btn.TextColor3 = Color3.new(1, 1, 1)
-    btn.Font = Enum.Font.SourceSansBold
-    Instance.new("UIStroke", btn).Color = color
-    Instance.new("UICorner", btn)
+local function CreateButton(name, text, pos, parent, color)
+    local btn = Instance.new("TextButton")
+    btn.Name = name
+    btn.Size = UDim2.new(1, -20, 0, 30)
+    btn.Position = pos
+    btn.BackgroundColor3 = color or Color3.fromRGB(45, 45, 45)
+    btn.Text = text
+    btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    btn.Font = Enum.Font.Gotham
+    btn.TextSize = 12
+    btn.Parent = parent
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 4)
+    corner.Parent = btn
     return btn
 end
 
-local LeftSide = Instance.new("Frame", MainFrame)
-LeftSide.Size = UDim2.new(0, 170, 0, 200)
-LeftSide.Position = UDim2.new(0, 15, 0, 50)
-LeftSide.BackgroundTransparency = 1
+local ToggleElements = CreateButton("ToggleElements", "Master Elements", UDim2.new(0, 10, 0, 40), MainFrame)
+local MassConvert = CreateButton("MassConvert", "Mass Convert (Negative)", UDim2.new(0, 10, 0, 75), MainFrame, Color3.fromRGB(60, 120, 60))
 
-local RightSide = Instance.new("Frame", MainFrame)
-RightSide.Size = UDim2.new(0, 170, 0, 200)
-RightSide.Position = UDim2.new(1, -185, 0, 50)
-RightSide.BackgroundTransparency = 1
+local CustomInput = Instance.new("TextBox")
+CustomInput.Size = UDim2.new(1, -20, 0, 30)
+CustomInput.Position = UDim2.new(0, 10, 0, 110)
+CustomInput.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
+CustomInput.Text = "Enter Amount"
+CustomInput.TextColor3 = Color3.fromRGB(200, 200, 200)
+CustomInput.Font = Enum.Font.Gotham
+CustomInput.Parent = MainFrame
 
-local SwingBtn = createToggle("Auto Swing", LeftSide, 0, Color3.fromRGB(255, 50, 50))
-local BeltBtn = createToggle("Auto Belts", RightSide, 0, Color3.fromRGB(50, 255, 50))
-local SwordBtn = createToggle("Auto Swords", RightSide, 45, Color3.fromRGB(50, 150, 255))
-local SellBtn = createToggle("Auto Sell", RightSide, 90, Color3.fromRGB(255, 150, 50))
+local CustomSubmit = CreateButton("SubmitBtn", "Submit Custom", UDim2.new(0, 10, 0, 145), MainFrame, Color3.fromRGB(70, 70, 150))
+local DiscordBtn = CreateButton("Discord", "Copy Discord", UDim2.new(0, 10, 0, 220), MainFrame, Color3.fromRGB(88, 101, 242))
 
--- Inputs
-local BurstInput = Instance.new("TextBox", LeftSide)
-BurstInput.Size = UDim2.new(1, 0, 0, 30)
-BurstInput.Position = UDim2.new(0, 0, 0, 45)
-BurstInput.Text = "5"
-BurstInput.PlaceholderText = "Burst (Max 50)"
-BurstInput.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
-BurstInput.TextColor3 = Color3.new(1, 1, 1)
-Instance.new("UICorner", BurstInput)
+MassConvert.MouseButton1Click:Connect(function()
+    ReplicatedStorage.rEvents.zenMasterEvent:FireServer("convertGems", -999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999)
+end)
 
--- [[ 5. AUTO-ACTION LOGIC ]]
-local States = {Swing = false, Belts = false, Swords = false, Sell = false}
-
--- Remote firing function that safely checks for ninjaEvent
-local function secureFire(...)
-    local event = game:GetService("Players").LocalPlayer:FindFirstChild("ninjaEvent")
-    if event then event:FireServer(...) end
-end
-
--- Teleport Logic (Auto Sell)
-task.spawn(function()
-    while task.wait(0.3) do
-        if States.Sell then
-            local p = game.Players.LocalPlayer.Character and game.Players.LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-            if p then
-                p.CFrame = CFrame.new(64.68, 2.97, -33.23)
-                task.wait(0.1)
-                p.CFrame = CFrame.new(62.62, 2.97, -29.22)
-            end
-        end
+CustomSubmit.MouseButton1Click:Connect(function()
+    local val = tonumber(CustomInput.Text)
+    if val then
+        ReplicatedStorage.rEvents.zenMasterEvent:FireServer("convertGems", val)
+    else
+        CustomInput.Text = "Invalid Number"
     end
 end)
 
--- Swing Logic
-task.spawn(function()
-    while task.wait() do
-        if States.Swing then
-            local b = math.clamp(tonumber(BurstInput.Text) or 1, 1, 50)
-            for i = 1, b do secureFire("swingKatana") end
-        end
-    end
+DiscordBtn.MouseButton1Click:Connect(function()
+    setclipboard("https://discord.gg/8qZskYxn6P")
+    DiscordBtn.Text = "Copied!"
+    task.wait(2)
+    DiscordBtn.Text = "Copy Discord"
 end)
 
--- Shop Logic
-task.spawn(function()
-    while task.wait(0.8) do
-        if States.Belts then secureFire("buyAllBelts", "Blazing Vortex Island") end
-        if States.Swords then secureFire("buyAllSwords", "Blazing Vortex Island") end
-    end
-end)
+local ElementsFrame = Instance.new("Frame")
+ElementsFrame.Size = UDim2.new(0, 180, 0, 200)
+ElementsFrame.Position = UDim2.new(1.1, 0, 0, 0)
+ElementsFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+ElementsFrame.Visible = false
+ElementsFrame.Parent = MainFrame
 
--- Toggle Connections
-local function setup(btn, key, name)
+local ElementsList = Instance.new("ScrollingFrame")
+ElementsList.Size = UDim2.new(1, 0, 1, 0)
+ElementsList.BackgroundTransparency = 1
+ElementsList.CanvasSize = UDim2.new(0, 0, 0, 320)
+ElementsList.Parent = ElementsFrame
+
+local elements = {"Shadow Charge", "Electral Chaos", "Blazing Entity", "Shadowfire", "Lightning", "Masterful Wrath", "Inferno", "Eternity Storm", "Frost"}
+
+for i, name in ipairs(elements) do
+    local btn = CreateButton("Elem"..i, name, UDim2.new(0, 5, 0, (i-1)*35), ElementsList)
     btn.MouseButton1Click:Connect(function()
-        States[key] = not States[key]
-        btn.Text = name .. ": " .. (States[key] and "ON" or "OFF")
-        btn.BackgroundColor3 = States[key] and Color3.fromRGB(40, 100, 40) or Color3.fromRGB(25, 25, 35)
+        ReplicatedStorage.rEvents.elementMasteryEvent:FireServer(name)
     end)
 end
 
-setup(SwingBtn, "Swing", "Auto Swing")
-setup(BeltBtn, "Belts", "Auto Belts")
-setup(SwordBtn, "Swords", "Auto Swords")
-setup(SellBtn, "Sell", "Auto Sell")
+ToggleElements.MouseButton1Click:Connect(function()
+    ElementsFrame.Visible = not ElementsFrame.Visible
+end)
