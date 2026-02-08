@@ -1,0 +1,166 @@
+--[[
+	WARNING: Heads up! This script has not been verified by ScriptBlox. Use at your own risk!
+]]
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local LocalPlayer = Players.LocalPlayer
+local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
+
+-- ScreenGui
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "MidnightUtility"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.Parent = PlayerGui
+
+-- Main Frame
+local MainFrame = Instance.new("Frame")
+MainFrame.Name = "MainFrame"
+MainFrame.Size = UDim2.new(0, 200, 0, 230)
+MainFrame.Position = UDim2.new(0.1, 0, 0.1, 0)
+MainFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+MainFrame.BorderSizePixel = 0
+MainFrame.Active = true
+MainFrame.Draggable = true
+MainFrame.Parent = ScreenGui
+
+Instance.new("UICorner", MainFrame).CornerRadius = UDim.new(0, 8)
+
+-- Header
+local Header = Instance.new("TextLabel")
+Header.Size = UDim2.new(1, 0, 0, 30)
+Header.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+Header.Text = "NINJA LEGENDS OP"
+Header.TextColor3 = Color3.fromRGB(255, 255, 255)
+Header.TextSize = 14
+Header.Font = Enum.Font.GothamBold
+Header.Parent = MainFrame
+Instance.new("UICorner", Header)
+
+-- Close Button
+local CloseBtn = Instance.new("TextButton")
+CloseBtn.Size = UDim2.new(0, 25, 0, 25)
+CloseBtn.Position = UDim2.new(1, -30, 0, 2)
+CloseBtn.BackgroundTransparency = 1
+CloseBtn.Text = "X"
+CloseBtn.TextColor3 = Color3.fromRGB(255, 80, 80)
+CloseBtn.TextSize = 18
+CloseBtn.Parent = MainFrame
+CloseBtn.MouseButton1Click:Connect(function()
+	ScreenGui:Destroy()
+end)
+
+-- Button creator
+local function CreateButton(name, text, pos, parent, color)
+	local btn = Instance.new("TextButton")
+	btn.Name = name
+	btn.Size = UDim2.new(1, -20, 0, 30)
+	btn.Position = pos
+	btn.BackgroundColor3 = color or Color3.fromRGB(45, 45, 45)
+	btn.Text = text
+	btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+	btn.Font = Enum.Font.Gotham
+	btn.TextSize = 12
+	btn.Parent = parent
+	Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 4)
+	return btn
+end
+
+-- Toggle Elements
+local ToggleElements = CreateButton(
+	"ToggleElements",
+	"Master Elements",
+	UDim2.new(0, 10, 0, 40),
+	MainFrame
+)
+
+-- Custom Input
+local CustomInput = Instance.new("TextBox")
+CustomInput.Size = UDim2.new(1, -20, 0, 30)
+CustomInput.Position = UDim2.new(0, 10, 0, 75)
+CustomInput.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
+CustomInput.Text = "Enter Amount"
+CustomInput.TextColor3 = Color3.fromRGB(200, 200, 200)
+CustomInput.Font = Enum.Font.Gotham
+CustomInput.TextSize = 12
+CustomInput.Parent = MainFrame
+Instance.new("UICorner", CustomInput).CornerRadius = UDim.new(0, 4)
+
+-- Submit Custom
+local CustomSubmit = CreateButton(
+	"SubmitBtn",
+	"Submit Custom",
+	UDim2.new(0, 10, 0, 110),
+	MainFrame,
+	Color3.fromRGB(70, 70, 150)
+)
+
+CustomSubmit.MouseButton1Click:Connect(function()
+	local val = tonumber(CustomInput.Text)
+	if val then
+		ReplicatedStorage.rEvents.zenMasterEvent:FireServer("convertGems", val)
+	else
+		CustomInput.Text = "Invalid Number"
+	end
+end)
+
+-- Discord Button
+local DiscordBtn = CreateButton(
+	"Discord",
+	"Copy Discord",
+	UDim2.new(0, 10, 0, 185),
+	MainFrame,
+	Color3.fromRGB(88, 101, 242)
+)
+
+DiscordBtn.MouseButton1Click:Connect(function()
+	setclipboard("https://discord.gg/8qZskYxn6P")
+	DiscordBtn.Text = "Copied!"
+	task.wait(2)
+	DiscordBtn.Text = "Copy Discord"
+end)
+
+-- Elements Frame
+local ElementsFrame = Instance.new("Frame")
+ElementsFrame.Size = UDim2.new(0, 180, 0, 200)
+ElementsFrame.Position = UDim2.new(1.1, 0, 0, 0)
+ElementsFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+ElementsFrame.Visible = false
+ElementsFrame.Parent = MainFrame
+Instance.new("UICorner", ElementsFrame).CornerRadius = UDim.new(0, 6)
+
+local ElementsList = Instance.new("ScrollingFrame")
+ElementsList.Size = UDim2.new(1, 0, 1, 0)
+ElementsList.BackgroundTransparency = 1
+ElementsList.CanvasSize = UDim2.new(0, 0, 0, 320)
+ElementsList.ScrollBarImageTransparency = 0.5
+ElementsList.Parent = ElementsFrame
+
+local elements = {
+	"Shadow Charge",
+	"Electral Chaos",
+	"Blazing Entity",
+	"Shadowfire",
+	"Lightning",
+	"Masterful Wrath",
+	"Inferno",
+	"Eternity Storm",
+	"Frost"
+}
+
+for i, name in ipairs(elements) do
+	local btn = CreateButton(
+		"Elem" .. i,
+		name,
+		UDim2.new(0, 5, 0, (i - 1) * 35),
+		ElementsList
+	)
+
+	btn.MouseButton1Click:Connect(function()
+		ReplicatedStorage.rEvents.elementMasteryEvent:FireServer(name)
+	end)
+end
+
+ToggleElements.MouseButton1Click:Connect(function()
+	ElementsFrame.Visible = not ElementsFrame.Visible
+end)
