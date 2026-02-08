@@ -1,126 +1,174 @@
-------[[
-	WARNING: Heads up! This script has not been verified by ScriptBlox. Use at your own risk!
+--[[ 
+    Midnight Utility v2
+    Redesigned GUI (Sidebar Layout)
 ]]
+
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 
+-- Cleanup old gui
+if PlayerGui:FindFirstChild("MidnightUtilityV2") then
+    PlayerGui.MidnightUtilityV2:Destroy()
+end
+
+-- ScreenGui
 local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "MidnightUtility"
+ScreenGui.Name = "MidnightUtilityV2"
 ScreenGui.ResetOnSpawn = false
 ScreenGui.Parent = PlayerGui
 
-local MainFrame = Instance.new("Frame")
-MainFrame.Name = "MainFrame"
-MainFrame.Size = UDim2.new(0, 200, 0, 260)
-MainFrame.Position = UDim2.new(0.1, 0, 0.1, 0)
-MainFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
-MainFrame.BorderSizePixel = 0
-MainFrame.Active = true
-MainFrame.Draggable = true
-MainFrame.Parent = ScreenGui
+-- Main container
+local Main = Instance.new("Frame")
+Main.Size = UDim2.new(0, 420, 0, 260)
+Main.Position = UDim2.new(0.1, 0, 0.15, 0)
+Main.BackgroundColor3 = Color3.fromRGB(22, 22, 22)
+Main.BorderSizePixel = 0
+Main.Active = true
+Main.Draggable = true
+Main.Parent = ScreenGui
 
-local UICorner = Instance.new("UICorner")
-UICorner.CornerRadius = UDim.new(0, 8)
-UICorner.Parent = MainFrame
+Instance.new("UICorner", Main).CornerRadius = UDim.new(0, 10)
 
+-- Header
 local Header = Instance.new("TextLabel")
-Header.Size = UDim2.new(1, 0, 0, 30)
-Header.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+Header.Size = UDim2.new(1, 0, 0, 32)
+Header.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
 Header.Text = "NINJA LEGENDS OP"
-Header.TextColor3 = Color3.fromRGB(255, 255, 255)
-Header.TextSize = 14
 Header.Font = Enum.Font.GothamBold
-Header.Parent = MainFrame
+Header.TextSize = 14
+Header.TextColor3 = Color3.fromRGB(255,255,255)
+Header.Parent = Main
+Instance.new("UICorner", Header).CornerRadius = UDim.new(0, 10)
 
-local HeaderCorner = Instance.new("UICorner")
-HeaderCorner.Parent = Header
-
-local CloseBtn = Instance.new("TextButton")
-CloseBtn.Size = UDim2.new(0, 25, 0, 25)
-CloseBtn.Position = UDim2.new(1, -30, 0, 2)
-CloseBtn.BackgroundTransparency = 1
-CloseBtn.Text = "X"
-CloseBtn.TextColor3 = Color3.fromRGB(255, 80, 80)
-CloseBtn.TextSize = 18
-CloseBtn.Parent = MainFrame
-CloseBtn.MouseButton1Click:Connect(function() ScreenGui:Destroy() end)
-
-local function CreateButton(name, text, pos, parent, color)
-    local btn = Instance.new("TextButton")
-    btn.Name = name
-    btn.Size = UDim2.new(1, -20, 0, 30)
-    btn.Position = pos
-    btn.BackgroundColor3 = color or Color3.fromRGB(45, 45, 45)
-    btn.Text = text
-    btn.TextColor3 = Color3.fromRGB(255, 255, 255)
-    btn.Font = Enum.Font.Gotham
-    btn.TextSize = 12
-    btn.Parent = parent
-    local corner = Instance.new("UICorner")
-    corner.CornerRadius = UDim.new(0, 4)
-    corner.Parent = btn
-    return btn
-end
-
-local ToggleElements = CreateButton("ToggleElements", "Master Elements", UDim2.new(0, 10, 0, 40), MainFrame)
-local MassConvert = CreateButton("MassConvert", "Mass Convert (Negative)", UDim2.new(0, 10, 0, 75), MainFrame, Color3.fromRGB(60, 120, 60))
-
-local CustomInput = Instance.new("TextBox")
-CustomInput.Size = UDim2.new(1, -20, 0, 30)
-CustomInput.Position = UDim2.new(0, 10, 0, 110)
-CustomInput.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
-CustomInput.Text = "Enter Amount"
-CustomInput.TextColor3 = Color3.fromRGB(200, 200, 200)
-CustomInput.Font = Enum.Font.Gotham
-CustomInput.Parent = MainFrame
-
-local CustomSubmit = CreateButton("SubmitBtn", "Submit Custom", UDim2.new(0, 10, 0, 145), MainFrame, Color3.fromRGB(70, 70, 150))
-local DiscordBtn = CreateButton("Discord", "Copy Discord", UDim2.new(0, 10, 0, 220), MainFrame, Color3.fromRGB(88, 101, 242))
-
-MassConvert.MouseButton1Click:Connect(function()
-    ReplicatedStorage.rEvents.zenMasterEvent:FireServer("convertGems", -999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999)
+-- Close
+local Close = Instance.new("TextButton")
+Close.Size = UDim2.new(0, 28, 0, 28)
+Close.Position = UDim2.new(1, -34, 0, 2)
+Close.Text = "✕"
+Close.TextSize = 18
+Close.BackgroundTransparency = 1
+Close.TextColor3 = Color3.fromRGB(255,80,80)
+Close.Parent = Main
+Close.MouseButton1Click:Connect(function()
+    ScreenGui:Destroy()
 end)
 
-CustomSubmit.MouseButton1Click:Connect(function()
-    local val = tonumber(CustomInput.Text)
-    if val then
-        ReplicatedStorage.rEvents.zenMasterEvent:FireServer("convertGems", val)
+-- Sidebar
+local Sidebar = Instance.new("Frame")
+Sidebar.Size = UDim2.new(0, 120, 1, -32)
+Sidebar.Position = UDim2.new(0, 0, 0, 32)
+Sidebar.BackgroundColor3 = Color3.fromRGB(26, 26, 26)
+Sidebar.BorderSizePixel = 0
+Sidebar.Parent = Main
+
+-- Content area
+local Content = Instance.new("Frame")
+Content.Size = UDim2.new(1, -120, 1, -32)
+Content.Position = UDim2.new(0, 120, 0, 32)
+Content.BackgroundTransparency = 1
+Content.Parent = Main
+
+-- Helpers
+local function button(parent, text, y, color)
+    local b = Instance.new("TextButton")
+    b.Size = UDim2.new(1, -16, 0, 30)
+    b.Position = UDim2.new(0, 8, 0, y)
+    b.BackgroundColor3 = color or Color3.fromRGB(45,45,45)
+    b.Text = text
+    b.Font = Enum.Font.Gotham
+    b.TextSize = 12
+    b.TextColor3 = Color3.fromRGB(255,255,255)
+    b.Parent = parent
+    Instance.new("UICorner", b).CornerRadius = UDim.new(0,6)
+    return b
+end
+
+local function page()
+    local f = Instance.new("Frame")
+    f.Size = UDim2.new(1, 0, 1, 0)
+    f.BackgroundTransparency = 1
+    f.Visible = false
+    f.Parent = Content
+    return f
+end
+
+-- Pages
+local MainPage = page()
+MainPage.Visible = true
+local ElementsPage = page()
+
+-- Sidebar buttons
+local HomeBtn = button(Sidebar, "Main", 10)
+local ElementsBtn = button(Sidebar, "Elements", 45)
+local DiscordBtn = button(Sidebar, "Discord", 80, Color3.fromRGB(88,101,242))
+
+local function show(p)
+    MainPage.Visible = false
+    ElementsPage.Visible = false
+    p.Visible = true
+end
+
+HomeBtn.MouseButton1Click:Connect(function() show(MainPage) end)
+ElementsBtn.MouseButton1Click:Connect(function() show(ElementsPage) end)
+
+-- === MAIN PAGE ===
+local ConvertNeg = button(MainPage, "Mass Convert (Negative)", 20, Color3.fromRGB(70,130,70))
+
+ConvertNeg.MouseButton1Click:Connect(function()
+    ReplicatedStorage.rEvents.zenMasterEvent:FireServer(
+        "convertGems",
+        -999999999999999999999999999999999999999999999999
+    )
+end)
+
+local Input = Instance.new("TextBox")
+Input.Size = UDim2.new(1, -32, 0, 30)
+Input.Position = UDim2.new(0, 16, 0, 60)
+Input.BackgroundColor3 = Color3.fromRGB(15,15,15)
+Input.Text = "Enter Amount"
+Input.Font = Enum.Font.Gotham
+Input.TextSize = 12
+Input.TextColor3 = Color3.fromRGB(200,200,200)
+Input.Parent = MainPage
+Instance.new("UICorner", Input).CornerRadius = UDim.new(0,6)
+
+local Submit = button(MainPage, "Submit Custom", 100, Color3.fromRGB(70,70,150))
+Submit.MouseButton1Click:Connect(function()
+    local v = tonumber(Input.Text)
+    if v then
+        ReplicatedStorage.rEvents.zenMasterEvent:FireServer("convertGems", v)
     else
-        CustomInput.Text = "Invalid Number"
+        Input.Text = "Invalid Number"
     end
 end)
 
-DiscordBtn.MouseButton1Click:Connect(function()
-    setclipboard("https://discord.gg/8qZskYxn6P")
-    DiscordBtn.Text = "Copied!"
-    task.wait(2)
-    DiscordBtn.Text = "Copy Discord"
-end)
+-- === ELEMENTS PAGE ===
+local Scroll = Instance.new("ScrollingFrame")
+Scroll.Size = UDim2.new(1, -20, 1, -20)
+Scroll.Position = UDim2.new(0, 10, 0, 10)
+Scroll.CanvasSize = UDim2.new(0, 0, 0, 360)
+Scroll.ScrollBarImageTransparency = 0.5
+Scroll.BackgroundTransparency = 1
+Scroll.Parent = ElementsPage
 
-local ElementsFrame = Instance.new("Frame")
-ElementsFrame.Size = UDim2.new(0, 180, 0, 200)
-ElementsFrame.Position = UDim2.new(1.1, 0, 0, 0)
-ElementsFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
-ElementsFrame.Visible = false
-ElementsFrame.Parent = MainFrame
-
-local ElementsList = Instance.new("ScrollingFrame")
-ElementsList.Size = UDim2.new(1, 0, 1, 0)
-ElementsList.BackgroundTransparency = 1
-ElementsList.CanvasSize = UDim2.new(0, 0, 0, 320)
-ElementsList.Parent = ElementsFrame
-
-local elements = {"Shadow Charge", "Electral Chaos", "Blazing Entity", "Shadowfire", "Lightning", "Masterful Wrath", "Inferno", "Eternity Storm", "Frost"}
+local elements = {
+    "Shadow Charge","Electral Chaos","Blazing Entity","Shadowfire",
+    "Lightning","Masterful Wrath","Inferno","Eternity Storm","Frost"
+}
 
 for i, name in ipairs(elements) do
-    local btn = CreateButton("Elem"..i, name, UDim2.new(0, 5, 0, (i-1)*35), ElementsList)
-    btn.MouseButton1Click:Connect(function()
+    local b = button(Scroll, name, (i-1)*35)
+    b.MouseButton1Click:Connect(function()
         ReplicatedStorage.rEvents.elementMasteryEvent:FireServer(name)
     end)
 end
 
-ToggleElements.MouseButton1Click:Connect(function()
-    ElementsFrame.Visible = not ElementsFrame.Visible
+-- Discord
+DiscordBtn.MouseButton1Click:Connect(function()
+    setclipboard("https://discord.gg/8qZskYxn6P")
+    DiscordBtn.Text = "Copied!"
+    task.wait(1.5)
+    DiscordBtn.Text = "Discord"
 end)
