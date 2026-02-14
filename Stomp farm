@@ -1,0 +1,215 @@
+-- Auto Kill + Auto TP + Auto Stomp onto players using workspace.Players ragdolls
+
+local Players            = game:GetService("Players")
+local Workspace          = game:GetService("Workspace")
+local RunService         = game:GetService("RunService")
+local ReplicatedStorage  = game:GetService("ReplicatedStorage")
+
+local LocalPlayer   = Players.LocalPlayer
+local playersFolder = Workspace:WaitForChild("Players")
+
+-- how high above their torso you appear (studs)
+local Y_OFFSET = 0.5
+-- how often to teleport (seconds)
+local TELEPORT_INTERVAL = 0.4
+
+---------------------------------------------------------------------
+-- Stomp remote
+---------------------------------------------------------------------
+local stompRemote = ReplicatedStorage
+	:WaitForChild("assets", 9e9)
+	:WaitForChild("dh", 9e9)
+	:WaitForChild("MainEvent", 9e9)
+
+local stompArgs     = {"Stomp"}
+local stompCooldown = false
+
+---------------------------------------------------------------------
+-- Kill remote (PrivateServerPanel Kill)
+---------------------------------------------------------------------
+local killRemote = ReplicatedStorage
+	:WaitForChild("assets", 9e9)
+	:WaitForChild("dh", 9e9)
+	:WaitForChild("RemoteFunction", 9e9)
+	:WaitForChild("RemoteFunction", 9e9)
+
+-- track which models we already tried to kill so we don't spam remote
+local killDone = {}
+
+local function killTargetModel(model)
+	if killDone[model] then return end
+
+	local plr = Players:FindFirstChild(model.Name)
+	if not plr then return end
+	if plr == LocalPlayer then return end -- don't kill yourself
+
+	killDone[model] = true
+
+	local args = {
+		[1] = "PrivateServerPanel",
+		[2] = {
+			["Action"] = "Kill",
+			["Arguments"] = {
+				["UserId"] = plr.UserId
+			}
+		}
+	}
+
+	pcall(function()
+		killRemote:InvokeServer(unpack(args))
+	end)
+end
+
+---------------------------------------------------------------------
+-- Helpers
+---------------------------------------------------------------------
+local function getLocalRoot()
+	local char = LocalPlayer.Character
+	if not char then return nil end
+	return char:FindFirstChild("HumanoidRootPart")
+		or char:FindFirstChild("UpperTorso")
+		or char:FindFirstChild("Torso")
+end
+
+local function getTargetTorso(model)
+	return model:FindFirstChild("UpperTorso")
+		or model:FindFirstChild("Torso")
+		or model:FindFirstChild("HumanoidRootPart")
+end
+
+-- run kill on anyone who has NONE of Knocked/Dead/Stomped true
+local function ensureKilledIfClean(model)
+	local knocked = model:GetAttribute("Knocked")
+	local dead    = model:GetAttribute("Dead")
+	local stomped = model:GetAttribute("Stomped")
+
+	if knocked ~= true and dead ~= true and stomped ~= true then
+		killTargetModel(model)
+	end
+end
+
+---------------------------------------------------------------------
+-- Target tracking (for stomp + TP)
+---------------------------------------------------------------------
+local currentTarget   = nil
+local timeSinceLastTP = 0
+
+RunService.Heartbeat:Connect(function(dt)
+	if not currentTarget then return end
+	if not currentTarget.Parent then
+		currentTarget = nil
+		return
+	end
+
+	local knocked = currentTarget:GetAttribute("Knocked")
+	local stomped = currentTarget:GetAttribute("Stomped")
+	local dead    = currentTarget:GetAttribute("Dead")
+
+	-- VALID STOMP TARGET: Knocked, not stomped
+	local isValid = (knocked == true) and (stomped ~= true)
+	if not isValid then
+		currentTarget = nil
+		return
+	end
+
+	timeSinceLastTP += dt
+	if timeSinceLastTP < TELEPORT_INTERVAL then
+		return
+	end
+	timeSinceLastTP = 0
+
+	local root  = getLocalRoot()
+	local torso = getTargetTorso(currentTarget)
+	if not root or not torso then return end
+
+	-- keep your rotation, only move position on top of torso
+	local oldCF = root.CFrame
+	local rX, rY, rZ = oldCF:ToEulerAnglesXYZ()
+
+	local newPos = torso.Position + Vector3.new(0, Y_OFFSET, 0)
+	root.CFrame = CFrame.new(newPos) * CFrame.Angles(rX, rY, rZ)
+
+	-- stomp spam (while knocked) with small cooldown
+	if not stompCooldown then
+		stompCooldown = true
+		pcall(function()
+			stompRemote:FireServer(unpack(stompArgs))
+		end)
+		task.delay(0.25, function()
+			stompCooldown = false
+		end)
+	end
+end)
+
+---------------------------------------------------------------------
+-- Attribute handling
+---------------------------------------------------------------------
+local function onAttributesChanged(model, attrName)
+	if attrName ~= "Knocked" and attrName ~= "Stomped" and attrName ~= "Dead" then
+		return
+	end
+
+	local knocked = model:GetAttribute("Knocked")
+	local stomped = model:GetAttribute("Stomped")
+	local dead    = model:GetAttribute("Dead")
+
+	-- 1) If none of them true, try to kill them (so server sets state)
+	ensureKilledIfClean(model)
+
+	-- 2) If they are now a valid knocked target, lock onto them
+	if knocked == true and stomped ~= true then
+		currentTarget   = model
+		timeSinceLastTP = 0
+		return
+	end
+
+	-- 3) If this was our target and they're no longer valid, drop them
+	if model == currentTarget then
+		local isValid = (knocked == true) and (stomped ~= true)
+		if not isValid then
+			currentTarget = nil
+		end
+	end
+end
+
+local function setupModel(model)
+	-- watch future attribute changes
+	model.AttributeChanged:Connect(function(attrName)
+		onAttributesChanged(model, attrName)
+	end)
+
+	-- run initial check:
+	-- if they have none of Knocked/Dead/Stomped, try to kill them
+	ensureKilledIfClean(model)
+
+	-- if they already start knocked & not stomped, instantly target them
+	local knocked = model:GetAttribute("Knocked")
+	local stomped = model:GetAttribute("Stomped")
+
+	if knocked == true and stomped ~= true then
+		currentTarget   = model
+		timeSinceLastTP = 0
+	end
+end
+
+-- hook existing models
+for _, m in ipairs(playersFolder:GetChildren()) do
+	if m:IsA("Model") then
+		setupModel(m)
+	end
+end
+
+-- hook new models
+playersFolder.ChildAdded:Connect(function(m)
+	if m:IsA("Model") then
+		setupModel(m)
+	end
+end)
+
+-- drop target if it gets removed
+playersFolder.ChildRemoved:Connect(function(m)
+	if m == currentTarget then
+		currentTarget = nil
+	end
+	killDone[m] = nil
+end)
