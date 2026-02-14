@@ -1,9 +1,9 @@
 -- Auto Kill + Auto TP + Auto Stomp onto knocked players in workspace.Players
 
-local Players          = game:GetService("Players")
-local Workspace        = game:GetService("Workspace")
-local RunService       = game:GetService("RunService")
-local ReplicatedStorage= game:GetService("ReplicatedStorage")
+local Players           = game:GetService("Players")
+local Workspace         = game:GetService("Workspace")
+local RunService        = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local LocalPlayer   = Players.LocalPlayer
 local playersFolder = Workspace:WaitForChild("Players")
@@ -37,18 +37,22 @@ local function killTargetModel(model)
 	-- match ragdoll model name to real Player
 	local plr = Players:FindFirstChild(model.Name)
 	if not plr then return end
-	if plr == LocalPlayer then return end -- don't kill yourself
+	if plr == LocalPlayer then return end -- don't nuke yourself
 
+	-- EXACT same structure as the working code you sent,
+	-- but with the UserId coming from the target player:
 	local args = {
 		[1] = "PrivateServerPanel",
 		[2] = {
 			["Action"] = "Kill",
 			["Arguments"] = {
-				["UserId"] = plr.UserId,
-			},
-		},
+				["UserId"] = plr.UserId
+			}
+		}
 	}
 
+	-- If this errors, check the dev console; if it silently does nothing,
+	-- it's probably permission/anti-abuse on the server.
 	pcall(function()
 		killRemote:InvokeServer(unpack(args))
 	end)
@@ -75,14 +79,14 @@ end
 ---------------------------------------------------------------------
 -- Target tracking
 ---------------------------------------------------------------------
-local currentTarget          = nil
-local timeSinceLastTP        = 0
-local killFiredForCurrent    = false
+local currentTarget       = nil
+local timeSinceLastTP     = 0
+local killFiredForCurrent = false
 
 RunService.Heartbeat:Connect(function(dt)
 	if not currentTarget then return end
 	if not currentTarget.Parent then
-		currentTarget = nil
+		currentTarget       = nil
 		killFiredForCurrent = false
 		return
 	end
@@ -94,15 +98,9 @@ RunService.Heartbeat:Connect(function(dt)
 	-- VALID TARGET: Knocked, not stomped, not dead
 	local isValid = (knocked == true) and (stomped ~= true) and (dead ~= true)
 	if not isValid then
-		currentTarget = nil
+		currentTarget       = nil
 		killFiredForCurrent = false
 		return
-	end
-
-	-- 🔫 run Kill once per target
-	if not killFiredForCurrent then
-		killFiredForCurrent = true
-		killTargetModel(currentTarget)
 	end
 
 	timeSinceLastTP += dt
@@ -111,7 +109,7 @@ RunService.Heartbeat:Connect(function(dt)
 	end
 	timeSinceLastTP = 0
 
-	local root = getLocalRoot()
+	local root  = getLocalRoot()
 	local torso = getTargetTorso(currentTarget)
 	if not root or not torso then return end
 
@@ -151,6 +149,9 @@ local function onAttributesChanged(model, attrName)
 		currentTarget       = model
 		timeSinceLastTP     = 0
 		killFiredForCurrent = false
+
+		-- 🔫 Immediately fire Kill on this target ONCE
+		killTargetModel(model)
 		return
 	end
 
@@ -178,6 +179,7 @@ local function setupModel(model)
 		currentTarget       = model
 		timeSinceLastTP     = 0
 		killFiredForCurrent = false
+		killTargetModel(model)
 	end
 end
 
