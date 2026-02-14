@@ -1,4 +1,4 @@
--- Auto Kill -> TP -> Stomp -> Next Target
+-------------------------- Auto Kill -> TP -> Stomp -> Next Target
 -- Uses workspace.Players ragdolls and Da Hood-style remotes
 
 local Players           = game:GetService("Players")
