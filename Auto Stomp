@@ -1,4 +1,5 @@
----- Auto Kill + Auto TP + Auto Stomp onto knocked players in workspace.Players
+-- Auto Kill -> TP -> Stomp -> Next Target
+-- Uses workspace.Players ragdolls and Da Hood-style remotes
 
 local Players           = game:GetService("Players")
 local Workspace         = game:GetService("Workspace")
@@ -10,7 +11,7 @@ local playersFolder = Workspace:WaitForChild("Players")
 
 -- how high above their torso you appear (studs)
 local Y_OFFSET = 0.5
--- how often to teleport (seconds)
+-- how often to teleport + stomp (seconds)
 local TELEPORT_INTERVAL = 0.4
 
 ---------------------------------------------------------------------
@@ -34,13 +35,10 @@ local killRemote = ReplicatedStorage
 	:WaitForChild("RemoteFunction", 9e9)
 
 local function killTargetModel(model)
-	-- match ragdoll model name to real Player
 	local plr = Players:FindFirstChild(model.Name)
 	if not plr then return end
-	if plr == LocalPlayer then return end -- don't nuke yourself
+	if plr == LocalPlayer then return end -- don't kill yourself
 
-	-- EXACT same structure as the working code you sent,
-	-- but with the UserId coming from the target player:
 	local args = {
 		[1] = "PrivateServerPanel",
 		[2] = {
@@ -51,8 +49,6 @@ local function killTargetModel(model)
 		}
 	}
 
-	-- If this errors, check the dev console; if it silently does nothing,
-	-- it's probably permission/anti-abuse on the server.
 	pcall(function()
 		killRemote:InvokeServer(unpack(args))
 	end)
@@ -69,40 +65,66 @@ local function getLocalRoot()
 		or char:FindFirstChild("Torso")
 end
 
--- Always try to use UpperTorso
 local function getTargetTorso(model)
 	return model:FindFirstChild("UpperTorso")
 		or model:FindFirstChild("Torso")
 		or model:FindFirstChild("HumanoidRootPart")
 end
 
+-- pick the next target:
+-- any model under workspace.Players, not you, and not marked Stomped
+local function getNextTarget()
+	for _, m in ipairs(playersFolder:GetChildren()) do
+		if m:IsA("Model") and m.Name ~= LocalPlayer.Name then
+			local stomped = m:GetAttribute("Stomped")
+			if stomped ~= true then
+				return m
+			end
+		end
+	end
+	return nil
+end
+
 ---------------------------------------------------------------------
--- Target tracking
+-- Main loop (sequential logic)
 ---------------------------------------------------------------------
 local currentTarget       = nil
-local timeSinceLastTP     = 0
 local killFiredForCurrent = false
+local timeSinceLastTP     = 0
 
 RunService.Heartbeat:Connect(function(dt)
-	if not currentTarget then return end
+	-- if we don't have a target, find the next one
+	if not currentTarget then
+		currentTarget       = getNextTarget()
+		killFiredForCurrent = false
+		timeSinceLastTP     = 0
+		return
+	end
+
+	-- if target vanished from workspace, drop it and try next
 	if not currentTarget.Parent then
 		currentTarget       = nil
 		killFiredForCurrent = false
 		return
 	end
 
-	local knocked = currentTarget:GetAttribute("Knocked")
+	-- if target is now marked stomped, we are done with them -> next
 	local stomped = currentTarget:GetAttribute("Stomped")
-	local dead    = currentTarget:GetAttribute("Dead")
-
-	-- VALID TARGET: Knocked, not stomped, not dead
-	local isValid = (knocked == true) and (stomped ~= true) and (dead ~= true)
-	if not isValid then
+	if stomped == true then
 		currentTarget       = nil
 		killFiredForCurrent = false
 		return
 	end
 
+	-- step 1: ensure we ran Kill on this target ONCE
+	if not killFiredForCurrent then
+		killFiredForCurrent = true
+		killTargetModel(currentTarget)
+		-- give the server a tick or two to process the kill if needed
+		return
+	end
+
+	-- step 2: every TELEPORT_INTERVAL, TP on them and stomp
 	timeSinceLastTP += dt
 	if timeSinceLastTP < TELEPORT_INTERVAL then
 		return
@@ -120,7 +142,7 @@ RunService.Heartbeat:Connect(function(dt)
 	local newPos = torso.Position + Vector3.new(0, Y_OFFSET, 0)
 	root.CFrame = CFrame.new(newPos) * CFrame.Angles(rX, rY, rZ)
 
-	-- 🥾 stomp spam (while knocked) with small cooldown
+	-- stomp spam with small cooldown while we're on this target
 	if not stompCooldown then
 		stompCooldown = true
 		pcall(function()
@@ -129,78 +151,5 @@ RunService.Heartbeat:Connect(function(dt)
 		task.delay(0.25, function()
 			stompCooldown = false
 		end)
-	end
-end)
-
----------------------------------------------------------------------
--- Attribute handling
----------------------------------------------------------------------
-local function onAttributesChanged(model, attrName)
-	if attrName ~= "Knocked" and attrName ~= "Stomped" and attrName ~= "Dead" then
-		return
-	end
-
-	local knocked = model:GetAttribute("Knocked")
-	local stomped = model:GetAttribute("Stomped")
-	local dead    = model:GetAttribute("Dead")
-
-	-- when they are (or become) a valid knocked target, lock onto them
-	if knocked == true and stomped ~= true and dead ~= true then
-		currentTarget       = model
-		timeSinceLastTP     = 0
-		killFiredForCurrent = false
-
-		-- 🔫 Immediately fire Kill on this target ONCE
-		killTargetModel(model)
-		return
-	end
-
-	-- if this model is our current target and becomes invalid, drop it
-	if model == currentTarget then
-		local isValid = (knocked == true) and (stomped ~= true) and (dead ~= true)
-		if not isValid then
-			currentTarget       = nil
-			killFiredForCurrent = false
-		end
-	end
-end
-
-local function setupModel(model)
-	model.AttributeChanged:Connect(function(attrName)
-		onAttributesChanged(model, attrName)
-	end)
-
-	-- if they already start knocked, lock onto them immediately
-	local knocked = model:GetAttribute("Knocked")
-	local stomped = model:GetAttribute("Stomped")
-	local dead    = model:GetAttribute("Dead")
-
-	if knocked == true and stomped ~= true and dead ~= true then
-		currentTarget       = model
-		timeSinceLastTP     = 0
-		killFiredForCurrent = false
-		killTargetModel(model)
-	end
-end
-
--- hook existing models
-for _, m in ipairs(playersFolder:GetChildren()) do
-	if m:IsA("Model") then
-		setupModel(m)
-	end
-end
-
--- hook new models
-playersFolder.ChildAdded:Connect(function(m)
-	if m:IsA("Model") then
-		setupModel(m)
-	end
-end)
-
--- drop target if it gets removed
-playersFolder.ChildRemoved:Connect(function(m)
-	if m == currentTarget then
-		currentTarget       = nil
-		killFiredForCurrent = false
 	end
 end)
