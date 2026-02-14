@@ -1,4 +1,4 @@
--- Auto Kill + Auto TP + Auto Stomp onto knocked players in workspace.Players
+--- Auto Kill + Auto TP + Auto Stomp onto knocked players in workspace.Players
 
 local Players           = game:GetService("Players")
 local Workspace         = game:GetService("Workspace")
