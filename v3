@@ -1,0 +1,235 @@
+-- Auto Kill (all) -> TP -> Stomp -> Next Target (loop kill + Y_OFFSET = 1)
+
+local Players           = game:GetService("Players")
+local Workspace         = game:GetService("Workspace")
+local RunService        = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local LocalPlayer   = Players.LocalPlayer
+local playersFolder = Workspace:WaitForChild("Players")
+
+-- how high above their torso you appear (studs)
+local Y_OFFSET = 1
+-- how often to teleport + stomp + kill (seconds)
+local TELEPORT_INTERVAL = 0.4
+
+---------------------------------------------------------------------
+-- Stomp remote
+---------------------------------------------------------------------
+local stompRemote = ReplicatedStorage
+    :WaitForChild("assets", 9e9)
+    :WaitForChild("dh", 9e9)
+    :WaitForChild("MainEvent", 9e9)
+
+local stompArgs     = {"Stomp"}
+local stompCooldown = false
+
+---------------------------------------------------------------------
+-- Kill remote (PrivateServerPanel Kill)
+---------------------------------------------------------------------
+local killRemote = ReplicatedStorage
+    :WaitForChild("assets", 9e9)
+    :WaitForChild("dh", 9e9)
+    :WaitForChild("RemoteFunction", 9e9)
+    :WaitForChild("RemoteFunction", 9e9)
+
+local function killTargetModel(model)
+    local plr = Players:FindFirstChild(model.Name)
+    if not plr then return end
+    if plr == LocalPlayer then return end -- remove this line if you ALSO want to kill yourself
+
+    local args = {
+        [1] = "PrivateServerPanel",
+        [2] = {
+            ["Action"] = "Kill",
+            ["Arguments"] = {
+                ["UserId"] = plr.UserId
+            }
+        }
+    }
+
+    pcall(function()
+        killRemote:InvokeServer(unpack(args))
+    end)
+end
+
+-- 🔥 kill ALL models in workspace.Players (except you)
+local function killAllModels()
+    for _, m in ipairs(playersFolder:GetChildren()) do
+        if m:IsA("Model") then
+            killTargetModel(m)
+        end
+    end
+end
+
+---------------------------------------------------------------------
+-- Helpers
+---------------------------------------------------------------------
+local function getLocalRoot()
+    local char = LocalPlayer.Character
+    if not char then return nil end
+    return char:FindFirstChild("HumanoidRootPart")
+        or char:FindFirstChild("UpperTorso")
+        or char:FindFirstChild("Torso")
+end
+
+local function getTargetTorso(model)
+    return model:FindFirstChild("UpperTorso")
+        or model:FindFirstChild("Torso")
+        or model:FindFirstChild("HumanoidRootPart")
+end
+
+-- pick the next target:
+-- any model under workspace.Players, not you, and not marked Stomped
+local function getNextTarget()
+    for _, m in ipairs(playersFolder:GetChildren()) do
+        if m:IsA("Model") and m.Name ~= LocalPlayer.Name then
+            local stomped = m:GetAttribute("Stomped")
+            if stomped ~= true then
+                return m
+            end
+        end
+    end
+    return nil
+end
+
+---------------------------------------------------------------------
+-- (optional) Stomp Counter HUD
+-- if you already have your own HUD, you can delete this whole block
+---------------------------------------------------------------------
+local leaderstats = LocalPlayer:FindFirstChild("leaderstats")
+local stompsStat = leaderstats and leaderstats:FindFirstChild("Stomps")
+
+local startTime = tick()
+local baseStomps = stompsStat and stompsStat.Value or 0
+local gainedStomps = 0
+
+if stompsStat then
+    stompsStat:GetPropertyChangedSignal("Value"):Connect(function()
+        local diff = stompsStat.Value - baseStomps
+        if diff < 0 then
+            baseStomps = stompsStat.Value
+            diff = 0
+        end
+        gainedStomps = diff
+    end)
+end
+
+local function createStompHud()
+    local pg = LocalPlayer:FindFirstChild("PlayerGui") or LocalPlayer:WaitForChild("PlayerGui")
+    local gui = Instance.new("ScreenGui")
+    gui.Name = "StompStatsGui"
+    gui.ResetOnSpawn = false
+    gui.Parent = pg
+
+    local label = Instance.new("TextLabel")
+    label.Name = "StompStatsLabel"
+    label.Size = UDim2.new(0, 260, 0, 50)
+    label.Position = UDim2.new(0, 10, 0, 10)
+    label.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
+    label.BackgroundTransparency = 0.3
+    label.BorderSizePixel = 0
+    label.TextColor3 = Color3.new(1, 1, 1)
+    label.TextStrokeTransparency = 0.2
+    label.Font = Enum.Font.GothamBold
+    label.TextSize = 14
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.TextYAlignment = Enum.TextYAlignment.Top
+    label.Parent = gui
+
+    local uiPadding = Instance.new("UIPadding")
+    uiPadding.PaddingLeft = UDim.new(0, 6)
+    uiPadding.PaddingTop = UDim.new(0, 4)
+    uiPadding.Parent = label
+
+    return label
+end
+
+local stompHudLabel = createStompHud()
+
+local function updateStompHud()
+    if not stompHudLabel then return end
+    local elapsed = tick() - startTime
+    if elapsed < 1 then
+        stompHudLabel.Text = string.format(
+            "Stomps gained: %d\nStomps/min: 0\nStomps/hr: 0",
+            gainedStomps
+        )
+        return
+    end
+
+    local perMin = gainedStomps / (elapsed / 60)
+    local perHour = gainedStomps / (elapsed / 3600)
+
+    stompHudLabel.Text = string.format(
+        "Stomps gained: %d\nStomps/min: %.2f\nStomps/hr: %.2f",
+        gainedStomps,
+        perMin,
+        perHour
+    )
+end
+
+---------------------------------------------------------------------
+-- Main loop (sequential TP + stomp, kill all)
+---------------------------------------------------------------------
+local currentTarget   = nil
+local timeSinceLastTP = 0
+
+RunService.Heartbeat:Connect(function(dt)
+    -- update stomp HUD
+    updateStompHud()
+
+    -- if we don't have a target, find the next one
+    if not currentTarget then
+        currentTarget   = getNextTarget()
+        timeSinceLastTP = 0
+        return
+    end
+
+    -- if target vanished from workspace, drop it and try next
+    if not currentTarget.Parent then
+        currentTarget   = nil
+        timeSinceLastTP = 0
+        return
+    end
+
+    -- if target is now marked stomped, we are done with them -> next
+    local stomped = currentTarget:GetAttribute("Stomped")
+    if stomped == true then
+        currentTarget   = nil
+        timeSinceLastTP = 0
+        return
+    end
+
+    -- every TELEPORT_INTERVAL, TP, run kill-all, and stomp
+    timeSinceLastTP += dt
+    if timeSinceLastTP < TELEPORT_INTERVAL then
+        return
+    end
+    timeSinceLastTP = 0
+
+    local root  = getLocalRoot()
+    local torso = getTargetTorso(currentTarget)
+    if not root or not torso then return end
+
+    -- keep your current rotation, only move position on top of torso
+    local oldCF = root.CFrame
+    local rX, rY, rZ = oldCF:ToEulerAnglesXYZ()
+
+    local newPos = torso.Position + Vector3.new(0, Y_OFFSET, 0)
+    root.CFrame = CFrame.new(newPos) * CFrame.Angles(rX, rY, rZ)
+
+    -- 🔫 run Kill on ALL models in workspace.Players (every 0.4s)
+    killAllModels()
+
+    -- 🥾 stomp spam with small cooldown while we're on this target
+    if not stompCooldown then
+        stompCooldown = true
+        pcall(function()
+            stompRemote:FireServer(unpack(stompArgs))
+        end)
+        task.delay(0.25, function()
+            stompCooldown = false
+        end)
+    end
+end)
