@@ -1,0 +1,69 @@
+--// AUTO BACKSTAB FARMER
+-- Toggle Key = P
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UIS = game:GetService("UserInputService")
+local LocalPlayer = Players.LocalPlayer
+local Character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+local HRP = Character:WaitForChild("HumanoidRootPart")
+
+local enabled = false
+local TOGGLE_KEY = Enum.KeyCode.P
+local SEARCH_RADIUS = 25
+local BEHIND_OFFSET = CFrame.new(0, 0, 3) -- 3 studs behind target
+
+-- Toggle function
+UIS.InputBegan:Connect(function(input, gp)
+    if gp then return end
+    if input.KeyCode == TOGGLE_KEY then
+        enabled = not enabled
+        print("Auto Backstab:", enabled and "ENABLED" or "DISABLED")
+    end
+end)
+
+-- Find the closest humanoid within radius
+local function getClosestEnemy()
+    local closest = nil
+    local closestDist = SEARCH_RADIUS
+
+    for _, v in pairs(workspace:GetDescendants()) do
+        if v:IsA("Model") and v ~= Character then
+            local hum = v:FindFirstChildOfClass("Humanoid")
+            local root = v:FindFirstChild("HumanoidRootPart")
+
+            if hum and root and hum.Health > 0 then
+                local dist = (HRP.Position - root.Position).Magnitude
+                if dist <= closestDist then
+                    closestDist = dist
+                    closest = v
+                end
+            end
+        end
+    end
+
+    return closest
+end
+
+-- MAIN LOOP
+RunService.Heartbeat:Connect(function()
+    if not enabled then return end
+    if not Character or not Character:FindFirstChild("HumanoidRootPart") then return end
+    HRP = Character.HumanoidRootPart
+
+    local target = getClosestEnemy()
+    if not target then return end
+
+    local hum = target:FindFirstChildOfClass("Humanoid")
+    local root = target:FindFirstChild("HumanoidRootPart")
+    if not hum or not root then return end
+
+    -- Teleport behind target
+    HRP.CFrame = root.CFrame * BEHIND_OFFSET
+
+    -- If dead → find next target
+    if hum.Health <= 0 then
+        task.wait(0.1)
+        return
+    end
+end)
