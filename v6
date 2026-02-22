@@ -1,0 +1,726 @@
+--================================================== 
+--  ROUTE FARM GUI - workspace.Scriptable.Mobs
+--  Route system (4 kills per mob type) + HUD + futuristic UI
+--==================================================
+
+--// SERVICES
+local Players = game:GetService("Players")
+local UIS     = game:GetService("UserInputService")
+
+local LocalPlayer = Players.LocalPlayer
+local Character   = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+local HRP         = Character:WaitForChild("HumanoidRootPart")
+
+-- Folder: workspace.Scriptable.Mobs
+local Scriptable  = workspace:WaitForChild("Scriptable")
+local MOBS_FOLDER = Scriptable:WaitForChild("Mobs")
+
+-- Radius for cluster area
+local CLUSTER_RADIUS = 80
+local BEHIND_OFFSET  = CFrame.new(0, 0, 3)
+
+-- Route settings
+local KILLS_PER_TYPE = 4
+
+--==================================================
+--  CHARACTER / HRP HANDLING (SURVIVES DEATH)
+--==================================================
+
+LocalPlayer.CharacterAdded:Connect(function(char)
+    Character = char
+    HRP = char:WaitForChild("HumanoidRootPart")
+end)
+
+local function ensureHRP()
+    if HRP and HRP.Parent then
+        return HRP
+    end
+
+    local char = LocalPlayer.Character
+    if not char or not char.Parent then
+        char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+    end
+
+    HRP = char:FindFirstChild("HumanoidRootPart") or char:WaitForChild("HumanoidRootPart")
+    return HRP
+end
+
+--==================================================
+--  GUI CREATION (futuristic, rounded, draggable)
+--==================================================
+local playerGui = LocalPlayer:WaitForChild("PlayerGui")
+
+local gui = Instance.new("ScreenGui")
+gui.Name = "MobRouteGui"
+gui.ResetOnSpawn = false
+gui.IgnoreGuiInset = true
+gui.Parent = playerGui
+
+local frame = Instance.new("Frame")
+frame.Size = UDim2.new(0, 280, 0, 430)
+frame.Position = UDim2.new(0, 30, 0, 140)
+frame.BackgroundColor3 = Color3.fromRGB(8, 8, 12)
+frame.BorderSizePixel = 0
+frame.Active = true
+frame.Parent = gui
+
+local frameCorner = Instance.new("UICorner")
+frameCorner.CornerRadius = UDim.new(0, 14)
+frameCorner.Parent = frame
+
+local frameStroke = Instance.new("UIStroke")
+frameStroke.Color = Color3.fromRGB(90, 150, 255)
+frameStroke.Thickness = 1.8
+frameStroke.Transparency = 0.15
+frameStroke.Parent = frame
+
+local frameGradient = Instance.new("UIGradient")
+frameGradient.Color = ColorSequence.new({
+    ColorSequenceKeypoint.new(0, Color3.fromRGB(10, 10, 20)),
+    ColorSequenceKeypoint.new(1, Color3.fromRGB(18, 24, 48))
+})
+frameGradient.Rotation = 45
+frameGradient.Parent = frame
+
+local title = Instance.new("TextLabel")
+title.Size = UDim2.new(1, -20, 0, 38)
+title.Position = UDim2.new(0, 10, 0, 8)
+title.BackgroundTransparency = 1
+title.Text = "Mob Route Farm"
+title.TextColor3 = Color3.fromRGB(220, 230, 255)
+title.Font = Enum.Font.GothamSemibold
+title.TextScaled = true
+title.TextXAlignment = Enum.TextXAlignment.Left
+title.Parent = frame
+
+local subtitle = Instance.new("TextLabel")
+subtitle.Size = UDim2.new(1, -20, 0, 18)
+subtitle.Position = UDim2.new(0, 10, 0, 42)
+subtitle.BackgroundTransparency = 1
+subtitle.Text = "Pick mobs, build route, auto farm"
+subtitle.TextColor3 = Color3.fromRGB(150, 170, 220)
+subtitle.Font = Enum.Font.Gotham
+subtitle.TextScaled = true
+subtitle.TextXAlignment = Enum.TextXAlignment.Left
+subtitle.Parent = frame
+
+local dropdown = Instance.new("TextButton")
+dropdown.Size = UDim2.new(1, -20, 0, 32)
+dropdown.Position = UDim2.new(0, 10, 0, 70)
+dropdown.BackgroundColor3 = Color3.fromRGB(20, 26, 50)
+dropdown.TextColor3 = Color3.fromRGB(230, 236, 255)
+dropdown.Font = Enum.Font.GothamSemibold
+dropdown.TextScaled = true
+dropdown.Text = "Select & Add to Route"
+dropdown.AutoButtonColor = false
+dropdown.Parent = frame
+
+local ddCorner = Instance.new("UICorner")
+ddCorner.CornerRadius = UDim.new(0, 10)
+ddCorner.Parent = dropdown
+
+local ddStroke = Instance.new("UIStroke")
+ddStroke.Color = Color3.fromRGB(90, 150, 255)
+ddStroke.Thickness = 1.3
+ddStroke.Transparency = 0.2
+ddStroke.Parent = dropdown
+
+local dropdownList = Instance.new("ScrollingFrame")
+dropdownList.Size = UDim2.new(1, -20, 0, 200)
+dropdownList.Position = UDim2.new(0, 10, 0, 110)
+dropdownList.BackgroundColor3 = Color3.fromRGB(10, 12, 26)
+dropdownList.BorderSizePixel = 0
+dropdownList.Visible = false
+dropdownList.ScrollBarThickness = 4
+dropdownList.AutomaticCanvasSize = Enum.AutomaticSize.Y
+dropdownList.CanvasSize = UDim2.new()
+dropdownList.Parent = frame
+
+local ddListCorner = Instance.new("UICorner")
+ddListCorner.CornerRadius = UDim.new(0, 10)
+ddListCorner.Parent = dropdownList
+
+local ddListStroke = Instance.new("UIStroke")
+ddListStroke.Color = Color3.fromRGB(70, 120, 220)
+ddListStroke.Thickness = 1
+ddListStroke.Transparency = 0.3
+ddListStroke.Parent = dropdownList
+
+local layout = Instance.new("UIListLayout")
+layout.SortOrder = Enum.SortOrder.LayoutOrder
+layout.Padding   = UDim.new(0, 4)
+layout.Parent    = dropdownList
+
+local routeLabel = Instance.new("TextLabel")
+routeLabel.Size = UDim2.new(1, -20, 0, 20)
+routeLabel.Position = UDim2.new(0, 10, 0, 315)
+routeLabel.BackgroundTransparency = 1
+routeLabel.TextColor3 = Color3.fromRGB(190, 205, 255)
+routeLabel.Font = Enum.Font.Gotham
+routeLabel.TextScaled = true
+routeLabel.TextXAlignment = Enum.TextXAlignment.Left
+routeLabel.Text = "Route: (empty)"
+routeLabel.Parent = frame
+
+local clearRouteBtn = Instance.new("TextButton")
+clearRouteBtn.Size = UDim2.new(0, 70, 0, 22)
+clearRouteBtn.Position = UDim2.new(1, -80, 0, 315)
+clearRouteBtn.BackgroundColor3 = Color3.fromRGB(30, 34, 70)
+clearRouteBtn.TextColor3 = Color3.fromRGB(220, 230, 255)
+clearRouteBtn.Font = Enum.Font.GothamSemibold
+clearRouteBtn.TextScaled = true
+clearRouteBtn.Text = "Clear"
+clearRouteBtn.AutoButtonColor = false
+clearRouteBtn.Parent = frame
+
+local startBtn = Instance.new("TextButton")
+startBtn.Size = UDim2.new(0.5, -15, 0, 40)
+startBtn.Position = UDim2.new(0, 10, 0, 350)
+startBtn.BackgroundColor3 = Color3.fromRGB(40, 180, 120)
+startBtn.TextColor3 = Color3.fromRGB(240, 250, 255)
+startBtn.Font = Enum.Font.GothamBold
+startBtn.TextScaled = true
+startBtn.Text = "START"
+startBtn.AutoButtonColor = false
+startBtn.Parent = frame
+
+local startCorner = Instance.new("UICorner")
+startCorner.CornerRadius = UDim.new(0, 10)
+startCorner.Parent = startBtn
+
+local stopBtn = Instance.new("TextButton")
+stopBtn.Size = UDim2.new(0.5, -15, 0, 40)
+stopBtn.Position = UDim2.new(0.5, 5, 0, 350)
+stopBtn.BackgroundColor3 = Color3.fromRGB(190, 60, 80)
+stopBtn.TextColor3 = Color3.fromRGB(255, 235, 240)
+stopBtn.Font = Enum.Font.GothamBold
+stopBtn.TextScaled = true
+stopBtn.Text = "STOP"
+stopBtn.AutoButtonColor = false
+stopBtn.Parent = frame
+
+local stopCorner = Instance.new("UICorner")
+stopCorner.CornerRadius = UDim.new(0, 10)
+stopCorner.Parent = stopBtn
+
+-- Hover helper
+local function makeHover(btn, baseColor, hoverColor)
+	btn.MouseEnter:Connect(function()
+		btn.BackgroundColor3 = hoverColor
+	end)
+	btn.MouseLeave:Connect(function()
+		btn.BackgroundColor3 = baseColor
+	end)
+end
+
+makeHover(startBtn, Color3.fromRGB(40, 180, 120), Color3.fromRGB(60, 210, 150))
+makeHover(stopBtn,  Color3.fromRGB(190, 60, 80),  Color3.fromRGB(220, 80, 100))
+makeHover(dropdown, Color3.fromRGB(20, 26, 50),  Color3.fromRGB(30, 40, 70))
+makeHover(clearRouteBtn, Color3.fromRGB(30, 34, 70), Color3.fromRGB(40, 44, 90))
+
+-- Simple dragging
+local dragging, dragStart, startPos
+frame.InputBegan:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 then
+		dragging  = true
+		dragStart = input.Position
+		startPos  = frame.Position
+	end
+end)
+frame.InputEnded:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 then
+		dragging = false
+	end
+end)
+UIS.InputChanged:Connect(function(input)
+	if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
+		local delta = input.Position - dragStart
+		frame.Position = UDim2.new(
+			startPos.X.Scale, startPos.X.Offset + delta.X,
+			startPos.Y.Scale, startPos.Y.Offset + delta.Y
+		)
+	end
+end)
+
+--==================================================
+--  HUD OVERLAY (kills, time, state)
+--==================================================
+local hudFrame = Instance.new("Frame")
+hudFrame.Size = UDim2.new(0, 260, 0, 70)
+hudFrame.Position = UDim2.new(1, -280, 0, 40)
+hudFrame.BackgroundColor3 = Color3.fromRGB(6, 8, 18)
+hudFrame.BorderSizePixel = 0
+hudFrame.Parent = gui
+
+local hudCorner = Instance.new("UICorner")
+hudCorner.CornerRadius = UDim.new(0, 12)
+hudCorner.Parent = hudFrame
+
+local hudStroke = Instance.new("UIStroke")
+hudStroke.Color = Color3.fromRGB(90, 150, 255)
+hudStroke.Thickness = 1.3
+hudStroke.Transparency = 0.35
+hudStroke.Parent = hudFrame
+
+local hudTitle = Instance.new("TextLabel")
+hudTitle.Size = UDim2.new(1, -10, 0, 20)
+hudTitle.Position = UDim2.new(0, 5, 0, 3)
+hudTitle.BackgroundTransparency = 1
+hudTitle.Text = "Farm HUD"
+hudTitle.TextColor3 = Color3.fromRGB(210, 220, 255)
+hudTitle.Font = Enum.Font.GothamSemibold
+hudTitle.TextScaled = true
+hudTitle.TextXAlignment = Enum.TextXAlignment.Left
+hudTitle.Parent = hudFrame
+
+local hudLine1 = Instance.new("TextLabel")
+hudLine1.Size = UDim2.new(1, -10, 0, 20)
+hudLine1.Position = UDim2.new(0, 5, 0, 24)
+hudLine1.BackgroundTransparency = 1
+hudLine1.Text = "Target: -  |  Kills: 0"
+hudLine1.TextColor3 = Color3.fromRGB(190, 205, 255)
+hudLine1.Font = Enum.Font.Gotham
+hudLine1.TextScaled = true
+hudLine1.TextXAlignment = Enum.TextXAlignment.Left
+hudLine1.Parent = hudFrame
+
+local hudLine2 = Instance.new("TextLabel")
+hudLine2.Size = UDim2.new(1, -10, 0, 20)
+hudLine2.Position = UDim2.new(0, 5, 0, 45)
+hudLine2.BackgroundTransparency = 1
+hudLine2.Text = "This: 0/4  |  Time: 00:00  |  Idle"
+hudLine2.TextColor3 = Color3.fromRGB(150, 170, 230)
+hudLine2.Font = Enum.Font.Gotham
+hudLine2.TextScaled = true
+hudLine2.TextXAlignment = Enum.TextXAlignment.Left
+hudLine2.Parent = hudFrame
+
+--==================================================
+--  STATE FOR ROUTE + HUD
+--==================================================
+local clusters = {}
+local route = {}
+local selectedConfig = nil
+local running = false
+local currentRouteIndex = 1
+local totalKills = 0
+local currentKillsOnTarget = 0
+local currentTargetName = "-"
+local hudState = "Idle"
+local runStartTime = nil
+
+local function formatTime(sec)
+	sec = math.max(0, math.floor(sec or 0))
+	local m = math.floor(sec / 60)
+	local s = sec % 60
+	return string.format("%02d:%02d", m, s)
+end
+
+local function updateRouteLabel()
+	if #route == 0 then
+		routeLabel.Text = "Route: (empty)"
+	else
+		local parts = {}
+		for i, cfg in ipairs(route) do
+			table.insert(parts, cfg.repName or "?")
+		end
+		routeLabel.Text = "Route: " .. table.concat(parts, " → ")
+	end
+end
+
+local function updateHUD()
+	local elapsed = 0
+	if runStartTime and running then
+		elapsed = tick() - runStartTime
+	end
+
+	hudLine1.Text = string.format(
+		"Target: %s  |  Kills: %d",
+		currentTargetName or "-", totalKills or 0
+	)
+
+	hudLine2.Text = string.format(
+		"This: %d/%d  |  Time: %s  |  %s",
+		currentKillsOnTarget or 0,
+		KILLS_PER_TYPE,
+		formatTime(elapsed),
+		hudState or "Idle"
+	)
+end
+
+task.spawn(function()
+	while true do
+		updateHUD()
+		task.wait(0.5)
+	end
+end)
+
+--==================================================
+--  MOB HELPERS (ONLY CHILDREN OF workspace.Scriptable.Mobs)
+--==================================================
+local function getRoot(mob)
+	return mob:FindFirstChild("HumanoidRootPart")
+end
+
+local function getHumanoid(mob)
+	return mob:FindFirstChildOfClass("Humanoid")
+end
+
+-- Return hpNumber (prefer NewHealth)
+local function getHPValue(mob)
+	local pvp = mob:FindFirstChild("PVPFolder")
+	if pvp then
+		local newHealth = pvp:FindFirstChild("NewHealth")
+		if newHealth and typeof(newHealth.Value) == "number" then
+			return newHealth.Value
+		end
+	end
+
+	local hum = getHumanoid(mob)
+	if hum then
+		return hum.Health
+	end
+
+	return nil
+end
+
+local function getAllMobsInFolder()
+	local list = {}
+	for _, child in ipairs(MOBS_FOLDER:GetChildren()) do
+		if getRoot(child) then
+			table.insert(list, child)
+		end
+	end
+	return list
+end
+
+--==================================================
+--  CLUSTER BUILDING (distance only, sorted by mob number)
+--==================================================
+-- returns: { { center = Vector3, members = {...}, repName, repNumber }, ... }
+
+local function buildClusters()
+	local mobs = getAllMobsInFolder()
+	local clustersBuilt = {}
+
+	for _, mob in ipairs(mobs) do
+		local root = getRoot(mob)
+		if not root then
+			continue
+		end
+
+		local placed = false
+
+		for _, cluster in ipairs(clustersBuilt) do
+			for _, other in ipairs(cluster.members) do
+				local otherRoot = getRoot(other)
+				if otherRoot and (root.Position - otherRoot.Position).Magnitude <= CLUSTER_RADIUS then
+					table.insert(cluster.members, mob)
+					placed = true
+					break
+				end
+			end
+			if placed then break end
+		end
+
+		if not placed then
+			table.insert(clustersBuilt, {members = {mob}})
+		end
+	end
+
+	for _, cluster in ipairs(clustersBuilt) do
+		local sum = Vector3.new()
+		local n   = 0
+		for _, mob in ipairs(cluster.members) do
+			local r = getRoot(mob)
+			if r then
+				sum += r.Position
+				n += 1
+			end
+		end
+		cluster.center = n > 0 and (sum / n) or nil
+
+		local repName   = "Unknown"
+		local repNumber = math.huge
+
+		if cluster.members[1] and cluster.members[1].Name then
+			repName = cluster.members[1].Name
+			local num = tonumber(repName)
+			if num then
+				repNumber = num
+			end
+		end
+
+		cluster.repName   = repName
+		cluster.repNumber = repNumber
+	end
+
+	table.sort(clustersBuilt, function(a, b)
+		return a.repNumber < b.repNumber
+	end)
+
+	return clustersBuilt
+end
+
+--==================================================
+--  STABLE DETECTION AROUND MOVING ANCHOR
+--==================================================
+
+local function getLivingInConfig(cfg)
+	local living = {}
+	if not cfg or not cfg.anchor or not cfg.repName then return living end
+
+	for _, mob in ipairs(MOBS_FOLDER:GetChildren()) do
+		if mob.Name == cfg.repName then
+			local root = getRoot(mob)
+			if root then
+				local dist = (root.Position - cfg.anchor).Magnitude
+				if dist <= CLUSTER_RADIUS * 1.5 then
+					local hpVal = getHPValue(mob)
+					if hpVal and hpVal > 0 then
+						table.insert(living, mob)
+					end
+				end
+			end
+		end
+	end
+
+	if #living > 0 then
+		local sum = Vector3.new()
+		local n = 0
+		for _, mob in ipairs(living) do
+			local r = getRoot(mob)
+			if r then
+				sum += r.Position
+				n += 1
+			end
+		end
+		if n > 0 then
+			cfg.anchor = sum / n
+		end
+	end
+
+	return living
+end
+
+--==================================================
+--  ROUTE-FARM KILL LOGIC (4 kills per mob type)
+--==================================================
+
+local function farmType(cfg, killGoal)
+	currentTargetName    = cfg.repName or "?"
+	currentKillsOnTarget = 0
+	hudState = "Farming"
+	updateHUD()
+
+	while running and currentKillsOnTarget < killGoal do
+		local living = getLivingInConfig(cfg)
+
+		if #living == 0 then
+			hudState = "Waiting"
+			updateHUD()
+			task.wait(0.25)
+		else
+			-- optional: sort by distance to anchor so it feels sane
+			table.sort(living, function(a, b)
+				local ra, rb = getRoot(a), getRoot(b)
+				if not ra or not rb then return false end
+				return (ra.Position - cfg.anchor).Magnitude < (rb.Position - cfg.anchor).Magnitude
+			end)
+
+			for _, mob in ipairs(living) do
+				if not running or currentKillsOnTarget >= killGoal then
+					break
+				end
+
+				local timeout = tick() + 12
+				local killedThisMob = false
+
+				while running do
+					if not mob or mob.Parent ~= MOBS_FOLDER then
+						killedThisMob = true
+						break
+					end
+
+					local root  = getRoot(mob)
+					local hpVal = getHPValue(mob)
+
+					if not root or not hpVal or hpVal <= 0 then
+						killedThisMob = true
+						break
+					end
+
+					local hrp = ensureHRP()
+					if hrp then
+						hrp.CFrame = root.CFrame * BEHIND_OFFSET
+					end
+
+					if tick() > timeout then
+						break
+					end
+
+					task.wait()
+				end
+
+				if killedThisMob then
+					currentKillsOnTarget += 1
+					totalKills += 1
+					hudState = "Farming"
+					updateHUD()
+					task.wait(0.05)
+				end
+			end
+		end
+	end
+end
+
+local function runRoute()
+	if #route == 0 then return end
+	running = true
+	runStartTime = tick()
+	totalKills = 0
+	currentRouteIndex = 1
+	hudState = "Farming"
+	updateHUD()
+
+	while running do
+		local cfg = route[currentRouteIndex]
+		if not cfg then break end
+
+		farmType(cfg, KILLS_PER_TYPE)
+
+		if not running then break end
+
+		-- move to next in route
+		currentRouteIndex += 1
+		if currentRouteIndex > #route then
+			currentRouteIndex = 1
+		end
+	end
+
+	hudState = "Idle"
+	updateHUD()
+	running = false
+end
+
+--==================================================
+--  DROPDOWN + ROUTE BUILDING
+--==================================================
+
+local function refreshDropdown()
+	for _, child in ipairs(dropdownList:GetChildren()) do
+		if child:IsA("TextButton") then
+			child:Destroy()
+		end
+	end
+
+	clusters = buildClusters()
+
+	for _, cluster in ipairs(clusters) do
+		local btn = Instance.new("TextButton")
+		btn.Size = UDim2.new(1, -8, 0, 28)
+		btn.BackgroundColor3 = Color3.fromRGB(18, 22, 40)
+		btn.TextColor3 = Color3.fromRGB(220, 230, 255)
+		btn.Font = Enum.Font.Gotham
+		btn.TextScaled = true
+		btn.AutoButtonColor = false
+
+		local repName = cluster.repName or "Unknown"
+		btn.Text = string.format("%s  (%d mobs)", repName, #cluster.members)
+		btn.Parent = dropdownList
+
+		local bc = Instance.new("UICorner")
+		bc.CornerRadius = UDim.new(0, 8)
+		bc.Parent = btn
+
+		local bStroke = Instance.new("UIStroke")
+		bStroke.Color = Color3.fromRGB(60, 100, 200)
+		bStroke.Thickness = 1
+		bStroke.Transparency = 0.5
+		bStroke.Parent = btn
+
+		makeHover(btn, Color3.fromRGB(18, 22, 40), Color3.fromRGB(30, 36, 66))
+
+		btn.MouseButton1Click:Connect(function()
+			-- build a config entry from this cluster
+			local cfg = {
+				repName = cluster.repName,
+				anchor  = cluster.center,
+			}
+			selectedConfig = cfg
+
+			-- add to route if not already present by repName
+			local exists = false
+			for _, r in ipairs(route) do
+				if r.repName == cfg.repName then
+					exists = true
+					break
+				end
+			end
+			if not exists then
+				table.insert(route, cfg)
+				updateRouteLabel()
+			end
+
+			dropdown.Text = "Added: " .. (cluster.repName or "Unknown")
+			dropdownList.Visible = false
+		end)
+	end
+
+	if #clusters == 0 then
+		dropdown.Text = "No groups"
+	elseif #route == 0 then
+		dropdown.Text = "Select & Add to Route"
+	end
+end
+
+dropdown.MouseButton1Click:Connect(function()
+	dropdownList.Visible = not dropdownList.Visible
+end)
+
+clearRouteBtn.MouseButton1Click:Connect(function()
+	route = {}
+	selectedConfig = nil
+	updateRouteLabel()
+end)
+
+--==================================================
+--  START / STOP HANDLERS
+--==================================================
+startBtn.MouseButton1Click:Connect(function()
+	if running then return end
+
+	-- If no route set, auto-create from first cluster
+	if #route == 0 then
+		if #clusters == 0 then
+			clusters = buildClusters()
+		end
+		if clusters[1] and clusters[1].center then
+			route = {
+				{
+					repName = clusters[1].repName,
+					anchor  = clusters[1].center,
+				}
+			}
+			updateRouteLabel()
+		else
+			return -- nothing to farm
+		end
+	end
+
+	task.spawn(runRoute)
+end)
+
+stopBtn.MouseButton1Click:Connect(function()
+	running = false
+end)
+
+--==================================================
+--  AUTO-REFRESH CLUSTERS FOR GUI
+--==================================================
+task.spawn(function()
+	while true do
+		refreshDropdown()
+		task.wait(0.75)
+	end
+end
