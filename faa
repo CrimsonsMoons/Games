@@ -1,0 +1,219 @@
+--// SERVICES
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+
+local LocalPlayer = Players.LocalPlayer
+local Character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+local HRP = Character:WaitForChild("HumanoidRootPart")
+
+local MOBS_FOLDER = workspace:WaitForChild("Scriptable"):WaitForChild("Mobs")
+
+local CLUSTER_RADIUS = 15  -- works perfectly for your mob spacing
+local BEHIND_OFFSET = CFrame.new(0, 0, 3)
+
+---------------------------------------------------------------------
+-- GUI CREATION
+---------------------------------------------------------------------
+local gui = Instance.new("ScreenGui", LocalPlayer.PlayerGui)
+
+local frame = Instance.new("Frame", gui)
+frame.Size = UDim2.new(0, 260, 0, 380)
+frame.Position = UDim2.new(0, 20, 0, 150)
+frame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+frame.BorderSizePixel = 2
+frame.Active = true
+frame.Draggable = true
+
+local title = Instance.new("TextLabel", frame)
+title.Size = UDim2.new(1, 0, 0, 35)
+title.BackgroundColor3 = Color3.fromRGB(45,45,45)
+title.Text = "Mob Groups"
+title.TextColor3 = Color3.new(1,1,1)
+title.Font = Enum.Font.SourceSansBold
+title.TextScaled = true
+
+local dropdown = Instance.new("TextButton", frame)
+dropdown.Size = UDim2.new(1, -10, 0, 35)
+dropdown.Position = UDim2.new(0,5,0,45)
+dropdown.BackgroundColor3 = Color3.fromRGB(60,60,60)
+dropdown.TextColor3 = Color3.new(1,1,1)
+dropdown.Font = Enum.Font.SourceSansBold
+dropdown.TextScaled = true
+dropdown.Text = "Select Group"
+
+local dropFrame = Instance.new("Frame", frame)
+dropFrame.Size = UDim2.new(1, -10, 0, 200)
+dropFrame.Position = UDim2.new(0,5,0,85)
+dropFrame.BackgroundColor3 = Color3.fromRGB(40,40,40)
+dropFrame.Visible = false
+
+local list = Instance.new("UIListLayout", dropFrame)
+list.SortOrder = Enum.SortOrder.LayoutOrder
+
+local startBtn = Instance.new("TextButton", frame)
+startBtn.Size = UDim2.new(1, -10, 0, 40)
+startBtn.Position = UDim2.new(0,5,0,300)
+startBtn.BackgroundColor3 = Color3.fromRGB(20,120,20)
+startBtn.TextColor3 = Color3.new(1,1,1)
+startBtn.TextScaled = true
+startBtn.Font = Enum.Font.SourceSansBold
+startBtn.Text = "START"
+
+local stopBtn = Instance.new("TextButton", frame)
+stopBtn.Size = UDim2.new(1, -10, 0, 40)
+stopBtn.Position = UDim2.new(0,5,0,345)
+stopBtn.BackgroundColor3 = Color3.fromRGB(120,20,20)
+stopBtn.TextColor3 = Color3.new(1,1,1)
+stopBtn.TextScaled = true
+stopBtn.Font = Enum.Font.SourceSansBold
+stopBtn.Text = "STOP"
+
+---------------------------------------------------------------------
+-- MOB HELPERS
+---------------------------------------------------------------------
+
+local function getHP(mob)
+	local folder = mob:FindFirstChild("PVPFolder")
+	if not folder then return nil end
+	local hp = folder:FindFirstChild("NewHealth")
+	return hp
+end
+
+local function getRoot(mob)
+	return mob:FindFirstChild("HumanoidRootPart")
+end
+
+---------------------------------------------------------------------
+-- GROUP MOBS BY DISTANCE CLUSTERS
+---------------------------------------------------------------------
+
+local function getMobClusters()
+	local mobs = {}
+
+	-- collect all alive mobs
+	for _, mob in pairs(MOBS_FOLDER:GetChildren()) do
+		local hp = getHP(mob)
+		local root = getRoot(mob)
+		if hp and root and hp.Value > 0 then
+			table.insert(mobs, mob)
+		end
+	end
+
+	local clusters = {}
+
+	for _, mob in ipairs(mobs) do
+		local root = getRoot(mob)
+		local placed = false
+
+		for _, cluster in ipairs(clusters) do
+			for _, cm in ipairs(cluster) do
+				local cRoot = getRoot(cm)
+				if (root.Position - cRoot.Position).Magnitude <= CLUSTER_RADIUS then
+					table.insert(cluster, mob)
+					placed = true
+					break
+				end
+			end
+			if placed then break end
+		end
+
+		if not placed then
+			table.insert(clusters, {mob})
+		end
+	end
+
+	return clusters
+end
+
+---------------------------------------------------------------------
+-- DROPDOWN REFRESH
+---------------------------------------------------------------------
+
+local selectedGroup = nil
+local running = false
+
+local function refreshDropdown()
+	for _, child in pairs(dropFrame:GetChildren()) do
+		if child:IsA("TextButton") then child:Destroy() end
+	end
+
+	local clusters = getMobClusters()
+
+	for i, cluster in ipairs(clusters) do
+		local btn = Instance.new("TextButton", dropFrame)
+		btn.Size = UDim2.new(1,0,0,30)
+		btn.BackgroundColor3 = Color3.fromRGB(70,70,70)
+		btn.TextColor3 = Color3.new(1,1,1)
+		btn.Font = Enum.Font.SourceSansBold
+		btn.TextScaled = true
+		btn.Text = "Group " .. i .. " (" .. #cluster .. " mobs)"
+
+		btn.MouseButton1Click:Connect(function()
+			selectedGroup = cluster
+			dropdown.Text = btn.Text
+			dropFrame.Visible = false
+		end)
+	end
+end
+
+dropdown.MouseButton1Click:Connect(function()
+	dropFrame.Visible = not dropFrame.Visible
+end)
+
+---------------------------------------------------------------------
+-- KILL LOGIC (NEVER GETS STUCK)
+---------------------------------------------------------------------
+
+local function killGroup(group)
+	running = true
+
+	for _, mob in ipairs(group) do
+		if not running then break end
+
+		local hp = getHP(mob)
+		local root = getRoot(mob)
+
+		if not hp or not root or hp.Value <= 0 then
+			continue
+		end
+
+		local timeout = tick() + 12
+
+		while running do
+			hp = getHP(mob)
+			root = getRoot(mob)
+
+			if not hp or hp.Value <= 0 then break end
+			if not root then break end
+
+			HRP.CFrame = root.CFrame * BEHIND_OFFSET
+
+			if tick() > timeout then break end
+
+			task.wait()
+		end
+	end
+
+	running = false
+end
+
+startBtn.MouseButton1Click:Connect(function()
+	if selectedGroup and not running then
+		killGroup(selectedGroup)
+	end
+end)
+
+stopBtn.MouseButton1Click:Connect(function()
+	running = false
+end)
+
+---------------------------------------------------------------------
+-- AUTO REFRESH GROUP LIST FOREVER
+---------------------------------------------------------------------
+
+task.spawn(function()
+	while true do
+		refreshDropdown()
+		task.wait(1.5)
+	end
+end)
