@@ -1,142 +1,223 @@
----// SERVICES
+--// SERVICES
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
+local UIS = game:GetService("UserInputService")
 local LocalPlayer = Players.LocalPlayer
+
 local Character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
 local HRP = Character:WaitForChild("HumanoidRootPart")
 
 local MOBS_FOLDER = workspace:WaitForChild("Scriptable"):WaitForChild("Mobs")
-local GROUP_RADIUS = 25
+
+local DISTANCE_RADIUS = 25
 local BEHIND_OFFSET = CFrame.new(0, 0, 3)
 
-----------------------------------------------------
+---------------------------------------------------------------------
 -- GUI CREATION
-----------------------------------------------------
-local ScreenGui = Instance.new("ScreenGui", LocalPlayer:WaitForChild("PlayerGui"))
-local Frame = Instance.new("Frame", ScreenGui)
-Frame.Size = UDim2.new(0, 225, 0, 300)
-Frame.Position = UDim2.new(0, 20, 0, 150)
-Frame.BackgroundColor3 = Color3.fromRGB(30,30,30)
-Frame.Active = true
-Frame.Draggable = true
+---------------------------------------------------------------------
+local gui = Instance.new("ScreenGui", LocalPlayer.PlayerGui)
 
-local UIList = Instance.new("UIListLayout", Frame)
-UIList.SortOrder = Enum.SortOrder.LayoutOrder
+local frame = Instance.new("Frame", gui)
+frame.Size = UDim2.new(0, 260, 0, 380)
+frame.Position = UDim2.new(0, 25, 0, 150)
+frame.BackgroundColor3 = Color3.fromRGB(25,25,25)
+frame.BorderSizePixel = 2
+frame.Active = true
+frame.Draggable = true
 
-local Title = Instance.new("TextLabel", Frame)
-Title.Text = "Mob Groups"
-Title.Size = UDim2.new(1,0,0,30)
-Title.BackgroundColor3 = Color3.fromRGB(50,50,50)
-Title.TextColor3 = Color3.fromRGB(255,255,255)
-Title.Font = Enum.Font.SourceSansBold
-Title.TextScaled = true
+local title = Instance.new("TextLabel", frame)
+title.Size = UDim2.new(1, 0, 0, 35)
+title.BackgroundColor3 = Color3.fromRGB(45,45,45)
+title.Text = "Mob Groups"
+title.TextColor3 = Color3.new(1,1,1)
+title.Font = Enum.Font.SourceSansBold
+title.TextScaled = true
 
-----------------------------------------------------
+local dropdown = Instance.new("TextButton", frame)
+dropdown.Size = UDim2.new(1, -10, 0, 35)
+dropdown.Position = UDim2.new(0, 5, 0, 45)
+dropdown.BackgroundColor3 = Color3.fromRGB(60,60,60)
+dropdown.TextColor3 = Color3.new(1,1,1)
+dropdown.Font = Enum.Font.SourceSansBold
+dropdown.TextScaled = true
+dropdown.Text = "Select Group"
+dropdown.Name = "Dropdown"
+
+local dropFrame = Instance.new("Frame", frame)
+dropFrame.Size = UDim2.new(1, -10, 0, 200)
+dropFrame.Position = UDim2.new(0, 5, 0, 85)
+dropFrame.BackgroundColor3 = Color3.fromRGB(40,40,40)
+dropFrame.Visible = false
+
+local list = Instance.new("UIListLayout", dropFrame)
+list.SortOrder = Enum.SortOrder.LayoutOrder
+
+local startBtn = Instance.new("TextButton", frame)
+startBtn.Size = UDim2.new(1, -10, 0, 40)
+startBtn.Position = UDim2.new(0, 5, 0, 300)
+startBtn.BackgroundColor3 = Color3.fromRGB(30,120,30)
+startBtn.Text = "START"
+startBtn.TextColor3 = Color3.new(1,1,1)
+startBtn.TextScaled = true
+startBtn.Font = Enum.Font.SourceSansBold
+
+local stopBtn = Instance.new("TextButton", frame)
+stopBtn.Size = UDim2.new(1, -10, 0, 40)
+stopBtn.Position = UDim2.new(0, 5, 0, 345)
+stopBtn.BackgroundColor3 = Color3.fromRGB(120,30,30)
+stopBtn.Text = "STOP"
+stopBtn.TextColor3 = Color3.new(1,1,1)
+stopBtn.TextScaled = true
+stopBtn.Font = Enum.Font.SourceSansBold
+
+---------------------------------------------------------------------
 -- GROUPING LOGIC
-----------------------------------------------------
-local function getMobRoot(model)
-    return model:FindFirstChild("HumanoidRootPart") or model:FindFirstChild("HRP")
+---------------------------------------------------------------------
+
+local function getHumanoid(model)
+	return model:FindFirstChildOfClass("Humanoid")
 end
 
-local function getMobHum(model)
-    return model:FindFirstChildOfClass("Humanoid")
+local function getRoot(model)
+	return model:FindFirstChild("HumanoidRootPart")
 end
 
--- Returns groups: { {mob1, mob2, mob3}, {mob4, mob5}, ... }
-local function groupMobs()
-    local mobs = {}
-    for _, mob in pairs(MOBS_FOLDER:GetChildren()) do
-        local hum = getMobHum(mob)
-        local root = getMobRoot(mob)
-        if hum and root and hum.Health > 0 then
-            table.insert(mobs, mob)
-        end
-    end
+-- groups by mob.Name → { "1" = {...}, "2" = {...} }
+local function groupByNumber()
+	local numberGroups = {}
 
-    local groups = {}
+	for _, mob in pairs(MOBS_FOLDER:GetChildren()) do
+		local hum = getHumanoid(mob)
+		local root = getRoot(mob)
 
-    for _, mob in ipairs(mobs) do
-        local added = false
-        local root = getMobRoot(mob)
+		if hum and root and hum.Health > 0 then
+			local mobNum = mob.Name
+			numberGroups[mobNum] = numberGroups[mobNum] or {}
+			table.insert(numberGroups[mobNum], mob)
+		end
+	end
 
-        for _, group in ipairs(groups) do
-            for _, gm in ipairs(group) do
-                local gmRoot = getMobRoot(gm)
-                if gmRoot and (root.Position - gmRoot.Position).Magnitude <= GROUP_RADIUS then
-                    table.insert(group, mob)
-                    added = true
-                    break
-                end
-            end
-            if added then break end
-        end
-
-        if not added then
-            table.insert(groups, {mob})
-        end
-    end
-
-    return groups
+	return numberGroups
 end
 
-----------------------------------------------------
--- AUTO KILL LOGIC
-----------------------------------------------------
+-- groups inside number-groups by distance
+local function groupByDistance(mobs)
+	local finalGroups = {}
+
+	for _, mob in ipairs(mobs) do
+		local root = getRoot(mob)
+		local placed = false
+
+		for _, group in ipairs(finalGroups) do
+			for _, gm in ipairs(group) do
+				local gRoot = getRoot(gm)
+				if (root.Position - gRoot.Position).Magnitude <= DISTANCE_RADIUS then
+					table.insert(group, mob)
+					placed = true
+					break
+				end
+			end
+			if placed then break end
+		end
+
+		if not placed then
+			table.insert(finalGroups, {mob})
+		end
+	end
+
+	return finalGroups
+end
+
+
+---------------------------------------------------------------------
+-- REFRESH DROPDOWN LIST
+---------------------------------------------------------------------
+local currentGroups = {}
+local selectedGroup = nil
+
+local function refreshDropdown()
+	-- clear old buttons
+	for _, child in pairs(dropFrame:GetChildren()) do
+		if child:IsA("TextButton") then
+			child:Destroy()
+		end
+	end
+
+	local numberGroups = groupByNumber()
+	currentGroups = {}
+
+	for mobNum, listMobs in pairs(numberGroups) do
+		local distanceGroups = groupByDistance(listMobs)
+
+		for i, g in ipairs(distanceGroups) do
+			local btn = Instance.new("TextButton", dropFrame)
+			btn.Size = UDim2.new(1, 0, 0, 30)
+			btn.BackgroundColor3 = Color3.fromRGB(70,70,70)
+			btn.TextColor3 = Color3.new(1,1,1)
+			btn.Font = Enum.Font.SourceSans
+			btn.TextScaled = true
+
+			btn.Text = "ID " .. mobNum .. " | Group " .. i .. " (" .. #g .. " mobs)"
+
+			btn.MouseButton1Click:Connect(function()
+				selectedGroup = g
+				dropdown.Text = btn.Text
+				dropFrame.Visible = false
+			end)
+
+			table.insert(currentGroups, g)
+		end
+	end
+end
+
+dropdown.MouseButton1Click:Connect(function()
+	dropFrame.Visible = not dropFrame.Visible
+end)
+
+---------------------------------------------------------------------
+-- AUTO-KILL
+---------------------------------------------------------------------
+
 local running = false
 
 local function killGroup(group)
-    running = true
+	running = true
 
-    for _, mob in ipairs(group) do
-        local hum = getMobHum(mob)
-        local root = getMobRoot(mob)
+	for _, mob in ipairs(group) do
+		if not running then break end
 
-        if hum and root and hum.Health > 0 then
-            while hum.Health > 0 and running do
-                HRP.CFrame = root.CFrame * BEHIND_OFFSET
-                task.wait()
-            end
-        end
-    end
+		local hum = getHumanoid(mob)
+		local root = getRoot(mob)
 
-    running = false
+		if hum and root and hum.Health > 0 then
+			while hum.Health > 0 and running do
+				if HRP then
+					HRP.CFrame = root.CFrame * BEHIND_OFFSET
+				end
+				task.wait()
+			end
+		end
+	end
+
+	running = false
 end
 
-----------------------------------------------------
--- GUI BUTTON GENERATION
-----------------------------------------------------
-local function refreshGui()
-    for _, child in pairs(Frame:GetChildren()) do
-        if child:IsA("TextButton") then
-            child:Destroy()
-        end
-    end
+startBtn.MouseButton1Click:Connect(function()
+	if selectedGroup and not running then
+		killGroup(selectedGroup)
+	end
+end)
 
-    local groups = groupMobs()
+stopBtn.MouseButton1Click:Connect(function()
+	running = false
+end)
 
-    for i, group in ipairs(groups) do
-        local btn = Instance.new("TextButton", Frame)
-        btn.Size = UDim2.new(1, 0, 0, 35)
-        btn.BackgroundColor3 = Color3.fromRGB(70,70,70)
-        btn.TextColor3 = Color3.fromRGB(255,255,255)
-        btn.Font = Enum.Font.SourceSansBold
-        btn.TextScaled = true
-        btn.Text = "Group " .. i .. " (" .. #group .. " mobs)"
-
-        btn.MouseButton1Click:Connect(function()
-            if not running then
-                killGroup(group)
-            end
-        end)
-    end
-end
-
-----------------------------------------------------
--- AUTO REFRESH GROUPS
-----------------------------------------------------
+---------------------------------------------------------------------
+-- AUTO REFRESH GROUPS FOREVER
+---------------------------------------------------------------------
 task.spawn(function()
-    while true do
-        refreshGui()
-        task.wait(1.5)
-    end
+	while true do
+		refreshDropdown()
+		task.wait(1.5)
+	end
 end)
