@@ -1,0 +1,376 @@
+--==================================================
+--  CLUSTER FARM GUI - ONLY USES workspace.Scriptable.Mobs
+--==================================================
+
+--// SERVICES
+local Players = game:GetService("Players")
+local UIS     = game:GetService("UserInputService")
+
+local LocalPlayer = Players.LocalPlayer
+local Character   = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+local HRP         = Character:WaitForChild("HumanoidRootPart")
+
+-- Keep HRP updated on respawn
+LocalPlayer.CharacterAdded:Connect(function(char)
+    Character = char
+    HRP = char:WaitForChild("HumanoidRootPart")
+end)
+
+-- *** THIS IS THE ONLY FOLDER WE TOUCH ***
+local Scriptable   = workspace:WaitForChild("Scriptable")
+local MOBS_FOLDER  = Scriptable:WaitForChild("Mobs") -- workspace.Scriptable.Mobs
+
+-- Radius for a “cluster” of mobs (make big so all four are together)
+local CLUSTER_RADIUS = 80
+local BEHIND_OFFSET  = CFrame.new(0, 0, 3)
+
+--==================================================
+--  GUI CREATION (clean, rounded, draggable)
+--==================================================
+local playerGui = LocalPlayer:WaitForChild("PlayerGui")
+
+local gui = Instance.new("ScreenGui")
+gui.Name = "MobClusterGui"
+gui.ResetOnSpawn = false
+gui.Parent = playerGui
+
+local frame = Instance.new("Frame")
+frame.Size = UDim2.new(0, 260, 0, 380)
+frame.Position = UDim2.new(0, 20, 0, 150)
+frame.BackgroundColor3 = Color3.fromRGB(18, 18, 18)
+frame.BorderSizePixel = 0
+frame.Active = true
+frame.Parent = gui
+
+local frameCorner = Instance.new("UICorner")
+frameCorner.CornerRadius = UDim.new(0, 8)
+frameCorner.Parent = frame
+
+local title = Instance.new("TextLabel")
+title.Size = UDim2.new(1, 0, 0, 36)
+title.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+title.Text = "Mob Clusters"
+title.TextColor3 = Color3.fromRGB(255, 255, 255)
+title.Font = Enum.Font.GothamBold
+title.TextScaled = true
+title.Parent = frame
+
+local titleCorner = Instance.new("UICorner")
+titleCorner.CornerRadius = UDim.new(0, 8)
+titleCorner.Parent = title
+
+local dropdown = Instance.new("TextButton")
+dropdown.Size = UDim2.new(1, -20, 0, 32)
+dropdown.Position = UDim2.new(0, 10, 0, 46)
+dropdown.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+dropdown.TextColor3 = Color3.fromRGB(255, 255, 255)
+dropdown.Font = Enum.Font.GothamSemibold
+dropdown.TextScaled = true
+dropdown.Text = "Select Cluster"
+dropdown.Parent = frame
+
+local ddCorner = Instance.new("UICorner")
+ddCorner.CornerRadius = UDim.new(0, 6)
+ddCorner.Parent = dropdown
+
+local dropdownList = Instance.new("ScrollingFrame")
+dropdownList.Size = UDim2.new(1, -20, 0, 200)
+dropdownList.Position = UDim2.new(0, 10, 0, 86)
+dropdownList.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+dropdownList.BorderSizePixel = 0
+dropdownList.Visible = false
+dropdownList.ScrollBarThickness = 4
+dropdownList.AutomaticCanvasSize = Enum.AutomaticSize.Y
+dropdownList.CanvasSize = UDim2.new()
+dropdownList.Parent = frame
+
+local ddListCorner = Instance.new("UICorner")
+ddListCorner.CornerRadius = UDim.new(0, 6)
+ddListCorner.Parent = dropdownList
+
+local layout = Instance.new("UIListLayout")
+layout.SortOrder = Enum.SortOrder.LayoutOrder
+layout.Padding   = UDim.new(0, 4)
+layout.Parent    = dropdownList
+
+local startBtn = Instance.new("TextButton")
+startBtn.Size = UDim2.new(1, -20, 0, 40)
+startBtn.Position = UDim2.new(0, 10, 0, 300)
+startBtn.BackgroundColor3 = Color3.fromRGB(40, 140, 60)
+startBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+startBtn.Font = Enum.Font.GothamBold
+startBtn.TextScaled = true
+startBtn.Text = "START"
+startBtn.Parent = frame
+
+local startCorner = Instance.new("UICorner")
+startCorner.CornerRadius = UDim.new(0, 6)
+startCorner.Parent = startBtn
+
+local stopBtn = Instance.new("TextButton")
+stopBtn.Size = UDim2.new(1, -20, 0, 40)
+stopBtn.Position = UDim2.new(0, 10, 0, 345)
+stopBtn.BackgroundColor3 = Color3.fromRGB(170, 40, 40)
+stopBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+stopBtn.Font = Enum.Font.GothamBold
+stopBtn.TextScaled = true
+stopBtn.Text = "STOP"
+stopBtn.Parent = frame
+
+local stopCorner = Instance.new("UICorner")
+stopCorner.CornerRadius = UDim.new(0, 6)
+stopCorner.Parent = stopBtn
+
+-- Simple dragging
+local dragging, dragStart, startPos
+frame.InputBegan:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 then
+		dragging  = true
+		dragStart = input.Position
+		startPos  = frame.Position
+	end
+end)
+frame.InputEnded:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 then
+		dragging = false
+	end
+end)
+UIS.InputChanged:Connect(function(input)
+	if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
+		local delta = input.Position - dragStart
+		frame.Position = UDim2.new(
+			startPos.X.Scale, startPos.X.Offset + delta.X,
+			startPos.Y.Scale, startPos.Y.Offset + delta.Y
+		)
+	end
+end)
+
+--==================================================
+--  MOB HELPERS (ONLY CHILDREN OF workspace.Scriptable.Mobs)
+--==================================================
+local function getRoot(mob)
+	return mob:FindFirstChild("HumanoidRootPart")
+end
+
+local function getHumanoid(mob)
+	return mob:FindFirstChildOfClass("Humanoid")
+end
+
+-- Return (hpNumber, objectUsed)
+local function getHPValue(mob)
+	local pvp = mob:FindFirstChild("PVPFolder")
+	if pvp then
+		local newHealth = pvp:FindFirstChild("NewHealth")
+		if newHealth and type(newHealth.Value) == "number" then
+			return newHealth.Value, newHealth
+		end
+	end
+
+	local hum = getHumanoid(mob)
+	if hum then
+		return hum.Health, hum
+	end
+
+	return nil, nil
+end
+
+local function getAllMobsInFolder()
+	-- only direct children of workspace.Scriptable.Mobs
+	local list = {}
+	for _, child in ipairs(MOBS_FOLDER:GetChildren()) do
+		if getRoot(child) then
+			table.insert(list, child)
+		end
+	end
+	return list
+end
+
+--==================================================
+--  CLUSTER BUILDING (distance only)
+--==================================================
+-- returns: { { center = Vector3, members = {mob1,mob2,...} }, ... }
+
+local function buildClusters()
+	local mobs = getAllMobsInFolder()
+	local clusters = {}
+
+	for _, mob in ipairs(mobs) do
+		local root = getRoot(mob)
+		if not root then
+			continue
+		end
+
+		local placed = false
+
+		for _, cluster in ipairs(clusters) do
+			for _, other in ipairs(cluster.members) do
+				local otherRoot = getRoot(other)
+				if otherRoot and (root.Position - otherRoot.Position).Magnitude <= CLUSTER_RADIUS then
+					table.insert(cluster.members, mob)
+					placed = true
+					break
+				end
+			end
+			if placed then break end
+		end
+
+		if not placed then
+			table.insert(clusters, {members = {mob}})
+		end
+	end
+
+	for _, cluster in ipairs(clusters) do
+		local sum = Vector3.new()
+		local n   = 0
+		for _, mob in ipairs(cluster.members) do
+			local r = getRoot(mob)
+			if r then
+				sum += r.Position
+				n += 1
+			end
+		end
+		cluster.center = n > 0 and (sum / n) or nil
+	end
+
+	return clusters
+end
+
+--==================================================
+--  DROPDOWN + SELECTION
+--==================================================
+local clusters = {}
+local selectedClusterIndex = nil
+local running = false
+
+local function refreshDropdown()
+	for _, child in ipairs(dropdownList:GetChildren()) do
+		if child:IsA("TextButton") then
+			child:Destroy()
+		end
+	end
+
+	clusters = buildClusters()
+
+	for i, cluster in ipairs(clusters) do
+		local btn = Instance.new("TextButton")
+		btn.Size = UDim2.new(1, -8, 0, 28)
+		btn.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+		btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+		btn.Font = Enum.Font.Gotham
+		btn.TextScaled = true
+		btn.Text = string.format("Cluster %d (%d mobs)", i, #cluster.members)
+		btn.Parent = dropdownList
+
+		local bc = Instance.new("UICorner")
+		bc.CornerRadius = UDim.new(0, 4)
+		bc.Parent = btn
+
+		btn.MouseButton1Click:Connect(function()
+			selectedClusterIndex = i
+			dropdown.Text = btn.Text
+			dropdownList.Visible = false
+		end)
+	end
+
+	if not selectedClusterIndex then
+		if #clusters > 0 then
+			dropdown.Text = "Select Cluster"
+		else
+			dropdown.Text = "No clusters"
+		end
+	end
+end
+
+dropdown.MouseButton1Click:Connect(function()
+	dropdownList.Visible = not dropdownList.Visible
+end)
+
+--==================================================
+--  KILL LOGIC (handles respawns in same area)
+--==================================================
+
+-- mobs currently alive inside this cluster's radius
+local function getLivingInCluster(cluster)
+	local living = {}
+	if not cluster.center then return living end
+
+	for _, mob in ipairs(MOBS_FOLDER:GetChildren()) do
+		local root = getRoot(mob)
+		if root and (root.Position - cluster.center).Magnitude <= CLUSTER_RADIUS then
+			local hpVal = getHPValue(mob)
+			if hpVal and hpVal > 0 then
+				table.insert(living, mob)
+			end
+		end
+	end
+
+	return living
+end
+
+local function killCluster(cluster)
+	running = true
+
+	while running do
+		-- re-scan folder EACH LOOP, so respawns inside same radius are picked up
+		local living = getLivingInCluster(cluster)
+
+		if #living == 0 then
+			break -- nothing left in this cluster area
+		end
+
+		for _, mob in ipairs(living) do
+			if not running then break end
+
+			local timeout = tick() + 12
+
+			while running do
+				local root  = getRoot(mob)
+				local hpVal = getHPValue(mob)
+
+				-- mob died, removed, or left the folder
+				if not root or not hpVal or hpVal <= 0 or mob.Parent ~= MOBS_FOLDER then
+					break
+				end
+
+				if not HRP then
+					local ch = LocalPlayer.Character
+					if ch then
+						HRP = ch:FindFirstChild("HumanoidRootPart")
+					end
+				end
+
+				if HRP then
+					HRP.CFrame = root.CFrame * BEHIND_OFFSET
+				end
+
+				if tick() > timeout then
+					break
+				end
+
+				task.wait()
+			end
+		end
+	end
+
+	running = false
+end
+
+startBtn.MouseButton1Click:Connect(function()
+	if selectedClusterIndex and clusters[selectedClusterIndex] and not running then
+		killCluster(clusters[selectedClusterIndex])
+	end
+end)
+
+stopBtn.MouseButton1Click:Connect(function()
+	running = false
+end)
+
+--==================================================
+--  AUTO-REFRESH CLUSTERS FOREVER (respawns included)
+--==================================================
+task.spawn(function()
+	while true do
+		refreshDropdown()
+		task.wait(0.5) -- fast refresh so respawns pop in quickly
+	end
+end)
