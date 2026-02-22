@@ -1,69 +1,142 @@
---// AUTO BACKSTAB FARMER
--- Toggle Key = P
-
+--// SERVICES
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
-local UIS = game:GetService("UserInputService")
 local LocalPlayer = Players.LocalPlayer
 local Character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
 local HRP = Character:WaitForChild("HumanoidRootPart")
 
-local enabled = false
-local TOGGLE_KEY = Enum.KeyCode.P
-local SEARCH_RADIUS = 25
-local BEHIND_OFFSET = CFrame.new(0, 0, 3) -- 3 studs behind target
+local MOBS_FOLDER = workspace:WaitForChild("Scriptable"):WaitForChild("Mobs")
+local GROUP_RADIUS = 25
+local BEHIND_OFFSET = CFrame.new(0, 0, 3)
 
--- Toggle function
-UIS.InputBegan:Connect(function(input, gp)
-    if gp then return end
-    if input.KeyCode == TOGGLE_KEY then
-        enabled = not enabled
-        print("Auto Backstab:", enabled and "ENABLED" or "DISABLED")
+----------------------------------------------------
+-- GUI CREATION
+----------------------------------------------------
+local ScreenGui = Instance.new("ScreenGui", LocalPlayer:WaitForChild("PlayerGui"))
+local Frame = Instance.new("Frame", ScreenGui)
+Frame.Size = UDim2.new(0, 225, 0, 300)
+Frame.Position = UDim2.new(0, 20, 0, 150)
+Frame.BackgroundColor3 = Color3.fromRGB(30,30,30)
+Frame.Active = true
+Frame.Draggable = true
+
+local UIList = Instance.new("UIListLayout", Frame)
+UIList.SortOrder = Enum.SortOrder.LayoutOrder
+
+local Title = Instance.new("TextLabel", Frame)
+Title.Text = "Mob Groups"
+Title.Size = UDim2.new(1,0,0,30)
+Title.BackgroundColor3 = Color3.fromRGB(50,50,50)
+Title.TextColor3 = Color3.fromRGB(255,255,255)
+Title.Font = Enum.Font.SourceSansBold
+Title.TextScaled = true
+
+----------------------------------------------------
+-- GROUPING LOGIC
+----------------------------------------------------
+local function getMobRoot(model)
+    return model:FindFirstChild("HumanoidRootPart") or model:FindFirstChild("HRP")
+end
+
+local function getMobHum(model)
+    return model:FindFirstChildOfClass("Humanoid")
+end
+
+-- Returns groups: { {mob1, mob2, mob3}, {mob4, mob5}, ... }
+local function groupMobs()
+    local mobs = {}
+    for _, mob in pairs(MOBS_FOLDER:GetChildren()) do
+        local hum = getMobHum(mob)
+        local root = getMobRoot(mob)
+        if hum and root and hum.Health > 0 then
+            table.insert(mobs, mob)
+        end
     end
-end)
 
--- Find the closest humanoid within radius
-local function getClosestEnemy()
-    local closest = nil
-    local closestDist = SEARCH_RADIUS
+    local groups = {}
 
-    for _, v in pairs(workspace:GetDescendants()) do
-        if v:IsA("Model") and v ~= Character then
-            local hum = v:FindFirstChildOfClass("Humanoid")
-            local root = v:FindFirstChild("HumanoidRootPart")
+    for _, mob in ipairs(mobs) do
+        local added = false
+        local root = getMobRoot(mob)
 
-            if hum and root and hum.Health > 0 then
-                local dist = (HRP.Position - root.Position).Magnitude
-                if dist <= closestDist then
-                    closestDist = dist
-                    closest = v
+        for _, group in ipairs(groups) do
+            for _, gm in ipairs(group) do
+                local gmRoot = getMobRoot(gm)
+                if gmRoot and (root.Position - gmRoot.Position).Magnitude <= GROUP_RADIUS then
+                    table.insert(group, mob)
+                    added = true
+                    break
                 end
+            end
+            if added then break end
+        end
+
+        if not added then
+            table.insert(groups, {mob})
+        end
+    end
+
+    return groups
+end
+
+----------------------------------------------------
+-- AUTO KILL LOGIC
+----------------------------------------------------
+local running = false
+
+local function killGroup(group)
+    running = true
+
+    for _, mob in ipairs(group) do
+        local hum = getMobHum(mob)
+        local root = getMobRoot(mob)
+
+        if hum and root and hum.Health > 0 then
+            while hum.Health > 0 and running do
+                HRP.CFrame = root.CFrame * BEHIND_OFFSET
+                task.wait()
             end
         end
     end
 
-    return closest
+    running = false
 end
 
--- MAIN LOOP
-RunService.Heartbeat:Connect(function()
-    if not enabled then return end
-    if not Character or not Character:FindFirstChild("HumanoidRootPart") then return end
-    HRP = Character.HumanoidRootPart
+----------------------------------------------------
+-- GUI BUTTON GENERATION
+----------------------------------------------------
+local function refreshGui()
+    for _, child in pairs(Frame:GetChildren()) do
+        if child:IsA("TextButton") then
+            child:Destroy()
+        end
+    end
 
-    local target = getClosestEnemy()
-    if not target then return end
+    local groups = groupMobs()
 
-    local hum = target:FindFirstChildOfClass("Humanoid")
-    local root = target:FindFirstChild("HumanoidRootPart")
-    if not hum or not root then return end
+    for i, group in ipairs(groups) do
+        local btn = Instance.new("TextButton", Frame)
+        btn.Size = UDim2.new(1, 0, 0, 35)
+        btn.BackgroundColor3 = Color3.fromRGB(70,70,70)
+        btn.TextColor3 = Color3.fromRGB(255,255,255)
+        btn.Font = Enum.Font.SourceSansBold
+        btn.TextScaled = true
+        btn.Text = "Group " .. i .. " (" .. #group .. " mobs)"
 
-    -- Teleport behind target
-    HRP.CFrame = root.CFrame * BEHIND_OFFSET
+        btn.MouseButton1Click:Connect(function()
+            if not running then
+                killGroup(group)
+            end
+        end)
+    end
+end
 
-    -- If dead → find next target
-    if hum.Health <= 0 then
-        task.wait(0.1)
-        return
+----------------------------------------------------
+-- AUTO REFRESH GROUPS
+----------------------------------------------------
+task.spawn(function()
+    while true do
+        refreshGui()
+        task.wait(1.5)
     end
 end)
