@@ -5,39 +5,34 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local LocalPlayer = Players.LocalPlayer
 
---// Main point
 local MAIN_POINT = CFrame.new(-233.99, 17.97, -321.95)
 
---// Offsets
 local CHEST_OFFSET = CFrame.new(0, 3, 0)
 local TITAN_OFFSET = CFrame.new(0, 14, 0)
 
---// Limits
 local TITAN_MAX_DISTANCE_FROM_MAIN = 999
 
---// Timings
 local TELEPORT_WAIT = 0.2
 local AFTER_PROMPT_WAIT = 0.15
 local LOOP_DELAY = 0.08
 local FORCE_STEPS = 10
 local LOOT_RESET_DELAY = 2
 local LOOT_SCAN_DELAY = 0.15
-local AUTO_CHEST_DISABLE_AFTER = 600 -- 10 minutes
+local AUTO_CHEST_DISABLE_AFTER = 900 -- 15 minutes
+local START_CHEST_DELAY = 60
 
---// Refs
 local Character
 local Humanoid
 local HumanoidRootPart
 
---// State
 local Busy = false
 local Running = true
 local TrackingTitan = false
 local AUTO_CHEST_ENABLED = true
+local START_CHEST_DONE = false
 local SeenChests = setmetatable({}, { __mode = "k" })
 local CollectedLoot = setmetatable({}, { __mode = "k" })
 
---// Folders / remotes
 local ActiveChests = Workspace:WaitForChild("ActiveChests", 9e9)
 local Enemies = Workspace:WaitForChild("Enemies", 9e9)
 local LootFolder = Workspace:WaitForChild("Loot", 9e9)
@@ -59,7 +54,7 @@ end)
 
 task.delay(AUTO_CHEST_DISABLE_AFTER, function()
 	AUTO_CHEST_ENABLED = false
-	print("Auto chest disabled after 10 minutes")
+	print("Auto chest disabled after 15 minutes")
 end)
 
 local function getRoot()
@@ -158,6 +153,25 @@ local function getChestData(chest)
 	return proxPart, prompt
 end
 
+local function getStartupChestPrompt()
+	local chest = Workspace:FindFirstChild("Chest")
+	if not chest then
+		return nil, nil
+	end
+
+	local proxPart = chest:FindFirstChild("Prox")
+	if not proxPart or not proxPart:IsA("BasePart") then
+		return nil, nil
+	end
+
+	local prompt = proxPart:FindFirstChildOfClass("ProximityPrompt")
+	if not prompt then
+		return nil, nil
+	end
+
+	return proxPart, prompt
+end
+
 local function getTitanRoot(titan)
 	if not titan or not titan.Parent then
 		return nil
@@ -201,6 +215,40 @@ local function stayAboveTitan(titan)
 
 	Busy = false
 	return ok
+end
+
+local function collectStartupChest()
+	if START_CHEST_DONE or TrackingTitan then
+		return
+	end
+
+	local root = getRoot()
+	local proxPart, prompt = getStartupChestPrompt()
+
+	if not root or not proxPart or not prompt then
+		return
+	end
+
+	START_CHEST_DONE = true
+	Busy = true
+	setAnchored(false)
+
+	local ok, err = pcall(function()
+		forceToCFrame(proxPart.CFrame * CHEST_OFFSET, false)
+		task.wait(TELEPORT_WAIT)
+
+		fireproximityprompt(prompt)
+		task.wait(AFTER_PROMPT_WAIT)
+
+		forceMainPoint()
+	end)
+
+	if not ok then
+		warn("Startup chest collect failed:", err)
+		forceMainPoint()
+	end
+
+	Busy = false
 end
 
 local function collectChest(chest)
@@ -290,6 +338,20 @@ local function scanChests()
 		collectChest(chest)
 	end
 end
+
+task.delay(START_CHEST_DELAY, function()
+	while Running and not START_CHEST_DONE do
+		if not Busy and not TrackingTitan then
+			collectStartupChest()
+		end
+
+		if START_CHEST_DONE then
+			break
+		end
+
+		task.wait(1)
+	end
+end)
 
 ActiveChests.ChildAdded:Connect(function(chest)
 	task.wait(0.05)
