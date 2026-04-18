@@ -1,0 +1,376 @@
+local Players = game:GetService("Players")
+local Workspace = game:GetService("Workspace")
+local RunService = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local LocalPlayer = Players.LocalPlayer
+
+--// Main point
+local MAIN_POINT = CFrame.new(-233.99, 17.97, -321.95)
+
+--// Offsets
+local CHEST_OFFSET = CFrame.new(0, 3, 0)
+local TITAN_OFFSET = CFrame.new(0, 14, 0)
+
+--// Limits
+local TITAN_MAX_DISTANCE_FROM_MAIN = 999
+
+--// Timings
+local TELEPORT_WAIT = 0.2
+local AFTER_PROMPT_WAIT = 0.15
+local LOOP_DELAY = 0.08
+local FORCE_STEPS = 10
+local LOOT_RESET_DELAY = 2
+local LOOT_SCAN_DELAY = 0.15
+local AUTO_CHEST_DISABLE_AFTER = 600 -- 10 minutes
+
+--// Refs
+local Character
+local Humanoid
+local HumanoidRootPart
+
+--// State
+local Busy = false
+local Running = true
+local TrackingTitan = false
+local AUTO_CHEST_ENABLED = true
+local SeenChests = setmetatable({}, { __mode = "k" })
+local CollectedLoot = setmetatable({}, { __mode = "k" })
+
+--// Folders / remotes
+local ActiveChests = Workspace:WaitForChild("ActiveChests", 9e9)
+local Enemies = Workspace:WaitForChild("Enemies", 9e9)
+local LootFolder = Workspace:WaitForChild("Loot", 9e9)
+
+local Events = ReplicatedStorage:WaitForChild("Events", 9e9)
+local RequestLootCollection = Events:WaitForChild("RequestLootCollection", 9e9)
+
+local function setupCharacter(char)
+	Character = char
+	Humanoid = char:WaitForChild("Humanoid")
+	HumanoidRootPart = char:WaitForChild("HumanoidRootPart")
+end
+
+setupCharacter(LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait())
+
+LocalPlayer.CharacterAdded:Connect(function(char)
+	setupCharacter(char)
+end)
+
+task.delay(AUTO_CHEST_DISABLE_AFTER, function()
+	AUTO_CHEST_ENABLED = false
+	print("Auto chest disabled after 10 minutes")
+end)
+
+local function getRoot()
+	if Character ~= LocalPlayer.Character then
+		setupCharacter(LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait())
+	end
+
+	if not HumanoidRootPart or not HumanoidRootPart.Parent then
+		HumanoidRootPart = Character:FindFirstChild("HumanoidRootPart") or Character:WaitForChild("HumanoidRootPart")
+	end
+
+	if not Humanoid or not Humanoid.Parent then
+		Humanoid = Character:FindFirstChildOfClass("Humanoid") or Character:WaitForChild("Humanoid")
+	end
+
+	return HumanoidRootPart, Humanoid
+end
+
+local function setNoClip()
+	if not Character then
+		return
+	end
+
+	for _, obj in ipairs(Character:GetDescendants()) do
+		if obj:IsA("BasePart") then
+			obj.CanCollide = false
+		end
+	end
+end
+
+local function setAnchored(state)
+	local root = getRoot()
+	if not root then
+		return
+	end
+
+	root.AssemblyLinearVelocity = Vector3.zero
+	root.AssemblyAngularVelocity = Vector3.zero
+	root.Anchored = state
+end
+
+local function forceToCFrame(targetCFrame, anchorAfter)
+	local root, hum = getRoot()
+	if not root then
+		return
+	end
+
+	if hum then
+		hum.AutoRotate = false
+	end
+
+	root.Anchored = false
+
+	for _ = 1, FORCE_STEPS do
+		if not root or not root.Parent then
+			break
+		end
+
+		root.AssemblyLinearVelocity = Vector3.zero
+		root.AssemblyAngularVelocity = Vector3.zero
+		root.CFrame = targetCFrame
+		RunService.Heartbeat:Wait()
+	end
+
+	if root and root.Parent then
+		root.AssemblyLinearVelocity = Vector3.zero
+		root.AssemblyAngularVelocity = Vector3.zero
+		root.CFrame = targetCFrame
+		root.Anchored = anchorAfter and true or false
+	end
+
+	if hum then
+		hum.AutoRotate = true
+	end
+end
+
+local function forceMainPoint()
+	forceToCFrame(MAIN_POINT, true)
+end
+
+local function getChestData(chest)
+	if not chest or not chest.Parent then
+		return nil, nil
+	end
+
+	local proxPart = chest:FindFirstChild("Prox")
+	if not proxPart or not proxPart:IsA("BasePart") then
+		return nil, nil
+	end
+
+	local prompt = proxPart:FindFirstChildOfClass("ProximityPrompt")
+	if not prompt then
+		return nil, nil
+	end
+
+	return proxPart, prompt
+end
+
+local function getTitanRoot(titan)
+	if not titan or not titan.Parent then
+		return nil
+	end
+
+	return titan:FindFirstChild("HumanoidRootPart")
+		or titan:FindFirstChild("UpperTorso")
+		or titan:FindFirstChild("Torso")
+		or titan.PrimaryPart
+end
+
+local function titanIsValid(titan)
+	local titanRoot = getTitanRoot(titan)
+	if not titanRoot then
+		return false, nil
+	end
+
+	local distFromMain = (titanRoot.Position - MAIN_POINT.Position).Magnitude
+	if distFromMain > TITAN_MAX_DISTANCE_FROM_MAIN then
+		return false, titanRoot
+	end
+
+	return true, titanRoot
+end
+
+local function stayAboveTitan(titan)
+	local root = getRoot()
+	local valid, titanRoot = titanIsValid(titan)
+
+	if not root or not valid or not titanRoot then
+		return false
+	end
+
+	TrackingTitan = true
+	Busy = true
+	setAnchored(false)
+
+	local ok = pcall(function()
+		forceToCFrame(titanRoot.CFrame * TITAN_OFFSET, false)
+	end)
+
+	Busy = false
+	return ok
+end
+
+local function collectChest(chest)
+	if not AUTO_CHEST_ENABLED then
+		return
+	end
+
+	if Busy or TrackingTitan or SeenChests[chest] then
+		return
+	end
+
+	local root = getRoot()
+	local proxPart, prompt = getChestData(chest)
+
+	if not root or not proxPart or not prompt then
+		return
+	end
+
+	Busy = true
+	SeenChests[chest] = true
+	setAnchored(false)
+
+	local ok, err = pcall(function()
+		forceToCFrame(proxPart.CFrame * CHEST_OFFSET, false)
+		task.wait(TELEPORT_WAIT)
+
+		fireproximityprompt(prompt)
+		task.wait(AFTER_PROMPT_WAIT)
+
+		forceMainPoint()
+	end)
+
+	if not ok then
+		warn("Chest collect failed:", chest.Name, err)
+		forceMainPoint()
+	end
+
+	task.delay(2, function()
+		SeenChests[chest] = nil
+	end)
+
+	Busy = false
+end
+
+local function tryCollectLoot(lootItem)
+	if not Running then
+		return
+	end
+
+	if not lootItem or not lootItem.Parent then
+		return
+	end
+
+	if CollectedLoot[lootItem] then
+		return
+	end
+
+	CollectedLoot[lootItem] = true
+
+	local args = {
+		[1] = {
+			[1] = lootItem
+		}
+	}
+
+	pcall(function()
+		RequestLootCollection:FireServer(unpack(args))
+	end)
+
+	task.delay(LOOT_RESET_DELAY, function()
+		CollectedLoot[lootItem] = nil
+	end)
+end
+
+local function scanLoot()
+	for _, lootItem in ipairs(LootFolder:GetChildren()) do
+		tryCollectLoot(lootItem)
+	end
+end
+
+local function scanChests()
+	if not AUTO_CHEST_ENABLED then
+		return
+	end
+
+	for _, chest in ipairs(ActiveChests:GetChildren()) do
+		collectChest(chest)
+	end
+end
+
+ActiveChests.ChildAdded:Connect(function(chest)
+	task.wait(0.05)
+	collectChest(chest)
+end)
+
+Enemies.ChildAdded:Connect(function(enemy)
+	if enemy.Name == "TitanZombie" then
+		task.wait(0.05)
+		stayAboveTitan(enemy)
+	end
+end)
+
+LootFolder.ChildAdded:Connect(function(lootItem)
+	task.wait()
+	tryCollectLoot(lootItem)
+end)
+
+RunService.Stepped:Connect(function()
+	setNoClip()
+
+	local root = getRoot()
+	if not root then
+		return
+	end
+
+	local titan = Enemies:FindFirstChild("TitanZombie")
+	local titanValid = false
+
+	if titan then
+		titanValid = titanIsValid(titan)
+	end
+
+	if titan and titanValid then
+		TrackingTitan = true
+		root.Anchored = false
+		root.AssemblyLinearVelocity = Vector3.zero
+		root.AssemblyAngularVelocity = Vector3.zero
+	else
+		TrackingTitan = false
+
+		if not Busy then
+			if (root.Position - MAIN_POINT.Position).Magnitude > 0.05 then
+				forceMainPoint()
+			else
+				root.AssemblyLinearVelocity = Vector3.zero
+				root.AssemblyAngularVelocity = Vector3.zero
+				root.CFrame = MAIN_POINT
+				root.Anchored = true
+			end
+		end
+	end
+end)
+
+task.spawn(function()
+	while Running do
+		local titan = Enemies:FindFirstChild("TitanZombie")
+		local titanValid = false
+
+		if titan then
+			titanValid = titanIsValid(titan)
+		end
+
+		if titan and titanValid then
+			stayAboveTitan(titan)
+		else
+			TrackingTitan = false
+
+			if not Busy then
+				forceMainPoint()
+				scanChests()
+			end
+		end
+
+		task.wait(LOOP_DELAY)
+	end
+end)
+
+task.spawn(function()
+	while Running do
+		scanLoot()
+		task.wait(LOOT_SCAN_DELAY)
+	end
+end)
