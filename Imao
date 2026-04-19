@@ -1,4 +1,3 @@
-
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
 local RunService = game:GetService("RunService")
@@ -26,6 +25,9 @@ local LOOT_SCAN_DELAY = 0.15
 local AUTO_CHEST_DISABLE_AFTER = 900
 local START_CHEST_DELAY = 60
 
+local UPGRADE_BURST_COUNT = 3
+local UPGRADE_BURST_DELAY = 0.5
+
 local Character
 local Humanoid
 local HumanoidRootPart
@@ -48,6 +50,34 @@ local LootFolder = Workspace:WaitForChild("Loot", 9e9)
 
 local Events = ReplicatedStorage:WaitForChild("Events", 9e9)
 local RequestLootCollection = Events:WaitForChild("RequestLootCollection", 9e9)
+local SelectUpgrade = Events:WaitForChild("SelectUpgrade", 9e9)
+local SkipUpgrade = Events:WaitForChild("SkipUpgrade", 9e9)
+
+local leaderstats = LocalPlayer:WaitForChild("leaderstats", 9e9)
+local Level = leaderstats and leaderstats:WaitForChild("Level", 9e9)
+
+local UpgradeOrder = {
+	"InfinitePower",
+	"InfiniteGold",
+	"InfiniteHaste",
+
+	"HolyWater",
+	"Meteor",
+	"TeslaCoil",
+	"HealthRegen",
+	"CursedSkull",
+	"DamageMultiplier",
+	"LifestealChance",
+	"XPMultiplier",
+	"SunAura",
+	"Bullet",
+}
+
+local UpgradeState = {
+	Running = false,
+	PendingRuns = 0,
+	LastLevel = Level and (tonumber(Level.Value) or 0) or 0,
+}
 
 local function setupCharacter(char)
 	Character = char
@@ -412,6 +442,66 @@ local function scanChests()
 	end
 end
 
+local function fireUpgrade(name)
+	local ok, err = pcall(function()
+		SelectUpgrade:FireServer(name)
+	end)
+
+	if not ok then
+		warn("Failed upgrade:", name, err)
+	end
+end
+
+local function fireAllUpgrades()
+	for _, upgradeName in ipairs(UpgradeOrder) do
+		fireUpgrade(upgradeName)
+	end
+end
+
+local function runUpgradeCycle()
+	UpgradeState.Running = true
+
+	while UpgradeState.PendingRuns > 0 do
+		UpgradeState.PendingRuns -= 1
+
+		for _ = 1, UPGRADE_BURST_COUNT do
+			fireAllUpgrades()
+			task.wait(UPGRADE_BURST_DELAY)
+		end
+
+		pcall(function()
+			SkipUpgrade:FireServer()
+		end)
+	end
+
+	UpgradeState.Running = false
+end
+
+local function onLevelChanged()
+	if not Level then
+		return
+	end
+
+	local newLevel = tonumber(Level.Value) or 0
+	local diff = newLevel - UpgradeState.LastLevel
+
+	if diff <= 0 then
+		UpgradeState.LastLevel = newLevel
+		return
+	end
+
+	UpgradeState.LastLevel = newLevel
+	UpgradeState.PendingRuns += diff
+
+	if not UpgradeState.Running then
+		task.spawn(runUpgradeCycle)
+	end
+end
+
+if Level then
+	Level:GetPropertyChangedSignal("Value"):Connect(onLevelChanged)
+end
+
 task.delay(START_CHEST_DELAY, function()
 	while Running and not START_CHEST_DONE do
 		if not Busy and not TrackingTitan then
@@ -519,3 +609,5 @@ task.spawn(function()
 		task.wait(LOOT_SCAN_DELAY)
 	end
 end)
+
+print("Loaded: main point, titan tracking, loot collect, startup chest, timed chest stop, level upgrade auto-select")
