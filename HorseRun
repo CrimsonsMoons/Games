@@ -1,5 +1,6 @@
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local UserInputService = game:GetService("UserInputService")
 
 local LocalPlayer = Players.LocalPlayer
 local PowerStat = LocalPlayer:WaitForChild("leaderstats"):WaitForChild("⚡️Power")
@@ -13,6 +14,11 @@ local RunTrainRemote = ReplicatedStorage
     :WaitForChild("TrainService", 9e9)
     :WaitForChild("RE", 9e9)
     :WaitForChild("RunTrain", 9e9)
+
+local TeleportPart = workspace:WaitForChild("Areas")
+    :WaitForChild("Area_1")
+    :WaitForChild("WinGates")
+    :WaitForChild("WinGate_16")
 
 local Treadmills = {
     {0, "Treadmill_1_1"},
@@ -29,7 +35,16 @@ local Treadmills = {
     {5000000000, "Treadmill_1_12"},
 }
 
-local function GetBestTreadmill(power)
+local function getCharacter()
+    return LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+end
+
+local function getRoot()
+    local character = getCharacter()
+    return character:FindFirstChild("HumanoidRootPart") or character:WaitForChild("HumanoidRootPart")
+end
+
+local function getBestTreadmill(power)
     local chosen = Treadmills[1][2]
 
     for i = 1, #Treadmills do
@@ -43,10 +58,21 @@ local function GetBestTreadmill(power)
     return chosen
 end
 
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then
+        return
+    end
+
+    if input.KeyCode == Enum.KeyCode.T then
+        local root = getRoot()
+        root.CFrame = TeleportPart.CFrame + Vector3.new(0, 3, 0)
+    end
+end)
+
 task.spawn(function()
     while true do
         local power = PowerStat.Value
-        local treadmill = GetBestTreadmill(power)
+        local treadmill = getBestTreadmill(power)
 
         pcall(function()
             RunTrainRemote:FireServer(treadmill)
