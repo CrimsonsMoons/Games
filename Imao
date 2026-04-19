@@ -5,38 +5,43 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local LocalPlayer = Players.LocalPlayer
 
+--// Main point
 local MAIN_POINT = CFrame.new(-233.99, 17.97, -321.95)
 
+--// When titan is high above, go lower here
+local LOW_POINT = CFrame.new(-233.99, 11.97, -321.95)
+
+--// Chest stuff
 local CHEST_OFFSET = CFrame.new(0, 3, 0)
-local TITAN_OFFSET_Y = 14
 
+--// Titan check
 local TITAN_MAX_DISTANCE_FROM_MAIN = 999
-local TITAN_HIGH_Y_LIMIT_FROM_MAIN = 28 -- max extra height above main point
-local TITAN_MIN_Y_FROM_MAIN = 0         -- do not go below main point height offset
+local TITAN_HIGH_Y_FROM_MAIN = 25 -- if titan is this many studs above main point, go lower
 
+--// Timing
 local TELEPORT_WAIT = 0.2
 local AFTER_PROMPT_WAIT = 0.15
 local LOOP_DELAY = 0.08
 local FORCE_STEPS = 10
 local LOOT_RESET_DELAY = 2
 local LOOT_SCAN_DELAY = 0.15
-local AUTO_CHEST_DISABLE_AFTER = 900
+local AUTO_CHEST_DISABLE_AFTER = 900 -- 15 minutes
 local START_CHEST_DELAY = 60
 
+--// Character refs
 local Character
 local Humanoid
 local HumanoidRootPart
 
+--// State
 local Busy = false
 local Running = true
-local TrackingTitan = false
 local AUTO_CHEST_ENABLED = true
 local START_CHEST_DONE = false
-local LockedTitan = nil
-
 local SeenChests = setmetatable({}, { __mode = "k" })
 local CollectedLoot = setmetatable({}, { __mode = "k" })
 
+--// Objects
 local ActiveChests = Workspace:WaitForChild("ActiveChests", 9e9)
 local Enemies = Workspace:WaitForChild("Enemies", 9e9)
 local LootFolder = Workspace:WaitForChild("Loot", 9e9)
@@ -51,10 +56,7 @@ local function setupCharacter(char)
 end
 
 setupCharacter(LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait())
-
-LocalPlayer.CharacterAdded:Connect(function(char)
-	setupCharacter(char)
-end)
+LocalPlayer.CharacterAdded:Connect(setupCharacter)
 
 task.delay(AUTO_CHEST_DISABLE_AFTER, function()
 	AUTO_CHEST_ENABLED = false
@@ -135,10 +137,6 @@ local function forceToCFrame(targetCFrame, anchorAfter)
 	end
 end
 
-local function forceMainPoint()
-	forceToCFrame(MAIN_POINT, true)
-end
-
 local function getChestData(chest)
 	if not chest or not chest.Parent then
 		return nil, nil
@@ -176,94 +174,52 @@ local function getStartupChestPrompt()
 	return proxPart, prompt
 end
 
-local function getTitanRoot(titan)
+local function getTitanRoot()
+	local titan = Enemies:FindFirstChild("TitanZombie")
 	if not titan or not titan.Parent then
 		return nil
 	end
 
-	return titan:FindFirstChild("HumanoidRootPart")
+	local titanRoot = titan:FindFirstChild("HumanoidRootPart")
 		or titan:FindFirstChild("UpperTorso")
 		or titan:FindFirstChild("Torso")
 		or titan.PrimaryPart
-end
 
-local function titanIsValid(titan)
-	local titanRoot = getTitanRoot(titan)
 	if not titanRoot then
-		return false, nil
+		return nil
 	end
 
 	local distFromMain = (titanRoot.Position - MAIN_POINT.Position).Magnitude
 	if distFromMain > TITAN_MAX_DISTANCE_FROM_MAIN then
-		return false, titanRoot
-	end
-
-	return true, titanRoot
-end
-
-local function clearTitan()
-	LockedTitan = nil
-	TrackingTitan = false
-end
-
-local function lockTitan(titan)
-	local valid = titanIsValid(titan)
-	if not valid then
-		return false
-	end
-
-	LockedTitan = titan
-	return true
-end
-
-local function getTitanTargetCFrame()
-	if not LockedTitan then
 		return nil
 	end
 
-	local valid, titanRoot = titanIsValid(LockedTitan)
-	if not valid or not titanRoot then
-		clearTitan()
-		return nil
-	end
-
-	local rawY = titanRoot.Position.Y + TITAN_OFFSET_Y
-	local minY = MAIN_POINT.Position.Y + TITAN_MIN_Y_FROM_MAIN
-	local maxY = MAIN_POINT.Position.Y + TITAN_HIGH_Y_LIMIT_FROM_MAIN
-	local clampedY = math.clamp(rawY, minY, maxY)
-
-	return CFrame.new(
-		titanRoot.Position.X,
-		clampedY,
-		titanRoot.Position.Z
-	)
+	return titanRoot
 end
 
-local function stayAboveTitan()
-	local root = getRoot()
-	if not root or not LockedTitan then
+local function shouldUseLowPoint()
+	local titanRoot = getTitanRoot()
+	if not titanRoot then
 		return false
 	end
 
-	local targetCFrame = getTitanTargetCFrame()
-	if not targetCFrame then
-		return false
+	return titanRoot.Position.Y >= (MAIN_POINT.Position.Y + TITAN_HIGH_Y_FROM_MAIN)
+end
+
+local function getSafeIdlePoint()
+	if shouldUseLowPoint() then
+		return LOW_POINT
 	end
 
-	TrackingTitan = true
-	Busy = true
-	setAnchored(false)
+	return MAIN_POINT
+end
 
-	local ok = pcall(function()
-		forceToCFrame(targetCFrame, false)
-	end)
-
-	Busy = false
-	return ok
+local function forceSafeIdlePoint()
+	forceToCFrame(getSafeIdlePoint(), true)
 end
 
 local function collectStartupChest()
-	if START_CHEST_DONE or TrackingTitan then
+	if START_CHEST_DONE then
 		return
 	end
 
@@ -283,12 +239,12 @@ local function collectStartupChest()
 		task.wait(TELEPORT_WAIT)
 		fireproximityprompt(prompt)
 		task.wait(AFTER_PROMPT_WAIT)
-		forceMainPoint()
+		forceSafeIdlePoint()
 	end)
 
 	if not ok then
 		warn("Startup chest collect failed:", err)
-		forceMainPoint()
+		forceSafeIdlePoint()
 	end
 
 	Busy = false
@@ -299,7 +255,7 @@ local function collectChest(chest)
 		return
 	end
 
-	if Busy or TrackingTitan or SeenChests[chest] then
+	if Busy or SeenChests[chest] then
 		return
 	end
 
@@ -319,12 +275,12 @@ local function collectChest(chest)
 		task.wait(TELEPORT_WAIT)
 		fireproximityprompt(prompt)
 		task.wait(AFTER_PROMPT_WAIT)
-		forceMainPoint()
+		forceSafeIdlePoint()
 	end)
 
 	if not ok then
 		warn("Chest collect failed:", chest.Name, err)
-		forceMainPoint()
+		forceSafeIdlePoint()
 	end
 
 	task.delay(2, function()
@@ -382,7 +338,7 @@ end
 
 task.delay(START_CHEST_DELAY, function()
 	while Running and not START_CHEST_DONE do
-		if not Busy and not TrackingTitan then
+		if not Busy then
 			collectStartupChest()
 		end
 
@@ -399,14 +355,6 @@ ActiveChests.ChildAdded:Connect(function(chest)
 	collectChest(chest)
 end)
 
-Enemies.ChildAdded:Connect(function(enemy)
-	if enemy.Name == "TitanZombie" then
-		task.wait(0.05)
-		lockTitan(enemy)
-		stayAboveTitan()
-	end
-end)
-
 LootFolder.ChildAdded:Connect(function(lootItem)
 	task.wait()
 	tryCollectLoot(lootItem)
@@ -420,58 +368,25 @@ RunService.Stepped:Connect(function()
 		return
 	end
 
-	if LockedTitan then
-		local valid = titanIsValid(LockedTitan)
-		if valid then
-			TrackingTitan = true
-			root.Anchored = false
+	if not Busy then
+		local targetPoint = getSafeIdlePoint()
+
+		if (root.Position - targetPoint.Position).Magnitude > 0.05 then
+			forceToCFrame(targetPoint, true)
+		else
 			root.AssemblyLinearVelocity = Vector3.zero
 			root.AssemblyAngularVelocity = Vector3.zero
-		else
-			clearTitan()
-		end
-	end
-
-	if not LockedTitan then
-		local titan = Enemies:FindFirstChild("TitanZombie")
-		if titan then
-			lockTitan(titan)
-		end
-	end
-
-	if not LockedTitan then
-		TrackingTitan = false
-
-		if not Busy then
-			if (root.Position - MAIN_POINT.Position).Magnitude > 0.05 then
-				forceMainPoint()
-			else
-				root.AssemblyLinearVelocity = Vector3.zero
-				root.AssemblyAngularVelocity = Vector3.zero
-				root.CFrame = MAIN_POINT
-				root.Anchored = true
-			end
+			root.CFrame = targetPoint
+			root.Anchored = true
 		end
 	end
 end)
 
 task.spawn(function()
 	while Running do
-		if LockedTitan then
-			stayAboveTitan()
-		else
-			local titan = Enemies:FindFirstChild("TitanZombie")
-
-			if titan and lockTitan(titan) then
-				stayAboveTitan()
-			else
-				TrackingTitan = false
-
-				if not Busy then
-					forceMainPoint()
-					scanChests()
-				end
-			end
+		if not Busy then
+			forceSafeIdlePoint()
+			scanChests()
 		end
 
 		task.wait(LOOP_DELAY)
