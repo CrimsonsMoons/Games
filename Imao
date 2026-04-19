@@ -8,13 +8,11 @@ local LocalPlayer = Players.LocalPlayer
 local MAIN_POINT = CFrame.new(-233.99, 17.97, -321.95)
 
 local CHEST_OFFSET = CFrame.new(0, 3, 0)
-local TITAN_TRACK_OFFSET_Y = 14
-local TITAN_FALL_HOVER_OFFSET_Y = 120
+local TITAN_OFFSET_Y = 14
 
 local TITAN_MAX_DISTANCE_FROM_MAIN = 999
-local TITAN_HIGH_ABOVE_ME_THRESHOLD = 6
-local TITAN_FALL_VELOCITY_THRESHOLD = -12
-local TITAN_GROUNDED_VELOCITY_THRESHOLD = -2
+local TITAN_HIGH_Y_LIMIT_FROM_MAIN = 28 -- max extra height above main point
+local TITAN_MIN_Y_FROM_MAIN = 0         -- do not go below main point height offset
 
 local TELEPORT_WAIT = 0.2
 local AFTER_PROMPT_WAIT = 0.15
@@ -34,9 +32,7 @@ local Running = true
 local TrackingTitan = false
 local AUTO_CHEST_ENABLED = true
 local START_CHEST_DONE = false
-
 local LockedTitan = nil
-local TitanFallMode = false
 
 local SeenChests = setmetatable({}, { __mode = "k" })
 local CollectedLoot = setmetatable({}, { __mode = "k" })
@@ -205,9 +201,8 @@ local function titanIsValid(titan)
 	return true, titanRoot
 end
 
-local function clearTitanLock()
+local function clearTitan()
 	LockedTitan = nil
-	TitanFallMode = false
 	TrackingTitan = false
 end
 
@@ -218,59 +213,33 @@ local function lockTitan(titan)
 	end
 
 	LockedTitan = titan
-	TitanFallMode = false
 	return true
 end
 
 local function getTitanTargetCFrame()
-	local root = getRoot()
-	if not root or not LockedTitan then
+	if not LockedTitan then
 		return nil
 	end
 
 	local valid, titanRoot = titanIsValid(LockedTitan)
 	if not valid or not titanRoot then
-		clearTitanLock()
+		clearTitan()
 		return nil
 	end
 
-	local titanY = titanRoot.Position.Y
-	local myY = root.Position.Y
-	local titanVelY = titanRoot.AssemblyLinearVelocity.Y
-
-	local titanHighAboveMe = (titanY - myY) > TITAN_HIGH_ABOVE_ME_THRESHOLD
-	local titanFalling = titanVelY < TITAN_FALL_VELOCITY_THRESHOLD
-
-	if titanFalling then
-		TitanFallMode = true
-	elseif TitanFallMode and titanVelY > TITAN_GROUNDED_VELOCITY_THRESHOLD then
-		TitanFallMode = false
-	end
-
-	if TitanFallMode then
-		return CFrame.new(
-			titanRoot.Position.X,
-			titanRoot.Position.Y + TITAN_FALL_HOVER_OFFSET_Y,
-			titanRoot.Position.Z
-		)
-	end
-
-	if titanHighAboveMe or titanVelY >= 0 then
-		return CFrame.new(
-			titanRoot.Position.X,
-			titanRoot.Position.Y + TITAN_TRACK_OFFSET_Y,
-			titanRoot.Position.Z
-		)
-	end
+	local rawY = titanRoot.Position.Y + TITAN_OFFSET_Y
+	local minY = MAIN_POINT.Position.Y + TITAN_MIN_Y_FROM_MAIN
+	local maxY = MAIN_POINT.Position.Y + TITAN_HIGH_Y_LIMIT_FROM_MAIN
+	local clampedY = math.clamp(rawY, minY, maxY)
 
 	return CFrame.new(
 		titanRoot.Position.X,
-		titanRoot.Position.Y + TITAN_TRACK_OFFSET_Y,
+		clampedY,
 		titanRoot.Position.Z
 	)
 end
 
-local function stayWithTitan()
+local function stayAboveTitan()
 	local root = getRoot()
 	if not root or not LockedTitan then
 		return false
@@ -312,10 +281,8 @@ local function collectStartupChest()
 	local ok, err = pcall(function()
 		forceToCFrame(proxPart.CFrame * CHEST_OFFSET, false)
 		task.wait(TELEPORT_WAIT)
-
 		fireproximityprompt(prompt)
 		task.wait(AFTER_PROMPT_WAIT)
-
 		forceMainPoint()
 	end)
 
@@ -350,10 +317,8 @@ local function collectChest(chest)
 	local ok, err = pcall(function()
 		forceToCFrame(proxPart.CFrame * CHEST_OFFSET, false)
 		task.wait(TELEPORT_WAIT)
-
 		fireproximityprompt(prompt)
 		task.wait(AFTER_PROMPT_WAIT)
-
 		forceMainPoint()
 	end)
 
@@ -438,7 +403,7 @@ Enemies.ChildAdded:Connect(function(enemy)
 	if enemy.Name == "TitanZombie" then
 		task.wait(0.05)
 		lockTitan(enemy)
-		stayWithTitan()
+		stayAboveTitan()
 	end
 end)
 
@@ -457,14 +422,13 @@ RunService.Stepped:Connect(function()
 
 	if LockedTitan then
 		local valid = titanIsValid(LockedTitan)
-
 		if valid then
 			TrackingTitan = true
 			root.Anchored = false
 			root.AssemblyLinearVelocity = Vector3.zero
 			root.AssemblyAngularVelocity = Vector3.zero
 		else
-			clearTitanLock()
+			clearTitan()
 		end
 	end
 
@@ -494,12 +458,12 @@ end)
 task.spawn(function()
 	while Running do
 		if LockedTitan then
-			stayWithTitan()
+			stayAboveTitan()
 		else
 			local titan = Enemies:FindFirstChild("TitanZombie")
 
 			if titan and lockTitan(titan) then
-				stayWithTitan()
+				stayAboveTitan()
 			else
 				TrackingTitan = false
 
