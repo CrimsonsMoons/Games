@@ -1,31 +1,36 @@
+
+
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local UserInputService = game:GetService("UserInputService")
 
 local LocalPlayer = Players.LocalPlayer
 local PowerStat = LocalPlayer:WaitForChild("leaderstats"):WaitForChild("⚡️Power")
 
-local Knit = ReplicatedStorage
+local KnitServices = ReplicatedStorage
     :WaitForChild("Packages", 9e9)
     :WaitForChild("_Index", 9e9)
     :WaitForChild("sleitnick_knit@1.5.1", 9e9)
     :WaitForChild("knit", 9e9)
     :WaitForChild("Services", 9e9)
 
-local RunTrainRemote = Knit
+local RunTrainRemote = KnitServices
     :WaitForChild("TrainService", 9e9)
     :WaitForChild("RE", 9e9)
     :WaitForChild("RunTrain", 9e9)
 
-local JoinContestRemote = Knit
+local JoinContestRemote = KnitServices
     :WaitForChild("FightService", 9e9)
     :WaitForChild("RE", 9e9)
     :WaitForChild("JoinContest", 9e9)
 
-local TeleportPart = workspace:WaitForChild("Areas")
+local GetWinsRemote = KnitServices
+    :WaitForChild("FightService", 9e9)
+    :WaitForChild("RE", 9e9)
+    :WaitForChild("GetWinsEvent", 9e9)
+
+local WinGatesFolder = workspace:WaitForChild("Areas")
     :WaitForChild("Area_1")
     :WaitForChild("WinGates")
-    :WaitForChild("WinGate_16")
 
 local Treadmills = {
     {0, "Treadmill_1_1"},
@@ -42,14 +47,13 @@ local Treadmills = {
     {5000000000, "Treadmill_1_12"},
 }
 
-local function getCharacter()
-    return LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
-end
+local AutoTrainEnabled = true
+local AutoJoinEnabled = true
+local AutoWinGateEnabled = true
 
-local function getRoot()
-    local character = getCharacter()
-    return character:FindFirstChild("HumanoidRootPart") or character:WaitForChild("HumanoidRootPart")
-end
+local TrainDelay = 0.5
+local JoinDelay = 1
+local WinBurstDelay = 0.1
 
 local function getBestTreadmill(power)
     local chosen = Treadmills[1][2]
@@ -65,36 +69,53 @@ local function getBestTreadmill(power)
     return chosen
 end
 
-local function joinContestAndTeleport()
-    pcall(function()
-        JoinContestRemote:FireServer("Area_1")
-    end)
+local function fireAllGatesAtOnce()
+    for i = 1, 16 do
+        local gate = WinGatesFolder:FindFirstChild("WinGate_" .. i)
 
-    task.wait(0.15)
-
-    local root = getRoot()
-    root.CFrame = TeleportPart.CFrame + Vector3.new(0, 3, 0)
+        if gate then
+            task.spawn(function()
+                pcall(function()
+                    GetWinsRemote:FireServer(gate.Name, gate.Position)
+                end)
+            end)
+        end
+    end
 end
 
-UserInputService.InputBegan:Connect(function(input, gameProcessed)
-    if gameProcessed then
-        return
-    end
+task.spawn(function()
+    while true do
+        if AutoTrainEnabled then
+            local power = PowerStat.Value
+            local treadmill = getBestTreadmill(power)
 
-    if input.KeyCode == Enum.KeyCode.T then
-        joinContestAndTeleport()
+            pcall(function()
+                RunTrainRemote:FireServer(treadmill)
+            end)
+        end
+
+        task.wait(TrainDelay)
     end
 end)
 
 task.spawn(function()
     while true do
-        local power = PowerStat.Value
-        local treadmill = getBestTreadmill(power)
+        if AutoJoinEnabled then
+            pcall(function()
+                JoinContestRemote:FireServer("Area_1")
+            end)
+        end
 
-        pcall(function()
-            RunTrainRemote:FireServer(treadmill)
-        end)
+        task.wait(JoinDelay)
+    end
+end)
 
-        task.wait(0.5)
+task.spawn(function()
+    while true do
+        if AutoWinGateEnabled then
+            fireAllGatesAtOnce()
+        end
+
+        task.wait(WinBurstDelay)
     end
 end)
