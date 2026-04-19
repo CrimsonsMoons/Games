@@ -34,6 +34,13 @@ local Treadmills = {
     {300000000, "Treadmill_1_10"},
     {1500000000, "Treadmill_1_11"},
     {5000000000, "Treadmill_1_12"},
+
+    {11000000000, "Treadmill_1_13"},      -- 11B
+    {53000000000, "Treadmill_1_14"},      -- 53B
+    {260000000000, "Treadmill_1_15"},     -- 260B
+    {2900000000000, "Treadmill_1_16"},    -- 2.9T
+    {14000000000000, "Treadmill_1_17"},   -- 14T
+    {68000000000000, "Treadmill_1_18"},   -- 68T
 }
 
 local function getBestTreadmill(power)
