@@ -1,0 +1,57 @@
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local LocalPlayer = Players.LocalPlayer
+local PowerStat = LocalPlayer:WaitForChild("leaderstats"):WaitForChild("⚡️Power")
+
+local RunTrainRemote = ReplicatedStorage
+    :WaitForChild("Packages", 9e9)
+    :WaitForChild("_Index", 9e9)
+    :WaitForChild("sleitnick_knit@1.5.1", 9e9)
+    :WaitForChild("knit", 9e9)
+    :WaitForChild("Services", 9e9)
+    :WaitForChild("TrainService", 9e9)
+    :WaitForChild("RE", 9e9)
+    :WaitForChild("RunTrain", 9e9)
+
+local Treadmills = {
+    {0, "Treadmill_1_1"},
+    {1000, "Treadmill_1_2"},
+    {5000, "Treadmill_1_3"},
+    {35000, "Treadmill_1_4"},
+    {400000, "Treadmill_1_5"},
+    {1000000, "Treadmill_1_6"},
+    {4000000, "Treadmill_1_7"},
+    {15000000, "Treadmill_1_8"},
+    {50000000, "Treadmill_1_9"},
+    {300000000, "Treadmill_1_10"},
+    {1500000000, "Treadmill_1_11"},
+    {5000000000, "Treadmill_1_12"},
+}
+
+local function GetBestTreadmill(power)
+    local chosen = Treadmills[1][2]
+
+    for i = 1, #Treadmills do
+        if power >= Treadmills[i][1] then
+            chosen = Treadmills[i][2]
+        else
+            break
+        end
+    end
+
+    return chosen
+end
+
+task.spawn(function()
+    while true do
+        local power = PowerStat.Value
+        local treadmill = GetBestTreadmill(power)
+
+        pcall(function()
+            RunTrainRemote:FireServer(treadmill)
+        end)
+
+        task.wait(0.5)
+    end
+end)
