@@ -22,7 +22,7 @@ local LOOP_DELAY = 0.08
 local FORCE_STEPS = 10
 local LOOT_RESET_DELAY = 2
 local LOOT_SCAN_DELAY = 0.15
-local AUTO_CHEST_DISABLE_AFTER = 900 -- 15 min
+local AUTO_CHEST_DISABLE_AFTER = 900
 local START_CHEST_DELAY = 60
 
 local Character
@@ -70,6 +70,10 @@ local function getRoot()
 		setupCharacter(LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait())
 	end
 
+	if not Character then
+		return nil, nil
+	end
+
 	if not HumanoidRootPart or not HumanoidRootPart.Parent then
 		HumanoidRootPart = Character:FindFirstChild("HumanoidRootPart") or Character:WaitForChild("HumanoidRootPart")
 	end
@@ -95,33 +99,34 @@ end
 
 local function forceToCFrame(targetCFrame, anchorAfter)
 	local root, hum = getRoot()
-	if not root then
+	if not root or not Character then
 		return false
 	end
 
 	if hum then
 		hum.AutoRotate = false
+		hum.Sit = false
 	end
 
 	root.Anchored = false
+	root.AssemblyLinearVelocity = Vector3.zero
+	root.AssemblyAngularVelocity = Vector3.zero
 
 	for _ = 1, FORCE_STEPS do
-		if not root or not root.Parent then
+		if not root.Parent then
 			break
 		end
 
+		Character:PivotTo(targetCFrame)
 		root.AssemblyLinearVelocity = Vector3.zero
 		root.AssemblyAngularVelocity = Vector3.zero
-		root.CFrame = targetCFrame
 		RunService.Heartbeat:Wait()
 	end
 
-	if root and root.Parent then
-		root.AssemblyLinearVelocity = Vector3.zero
-		root.AssemblyAngularVelocity = Vector3.zero
-		root.CFrame = targetCFrame
-		root.Anchored = anchorAfter
-	end
+	Character:PivotTo(targetCFrame)
+	root.AssemblyLinearVelocity = Vector3.zero
+	root.AssemblyAngularVelocity = Vector3.zero
+	root.Anchored = anchorAfter and true or false
 
 	if hum then
 		hum.AutoRotate = true
@@ -446,6 +451,11 @@ RunService.Stepped:Connect(function()
 		return
 	end
 
+	if Busy then
+		root.Anchored = false
+		return
+	end
+
 	if LockedTitan then
 		local valid = titanIsValid(LockedTitan)
 
@@ -454,6 +464,7 @@ RunService.Stepped:Connect(function()
 			root.Anchored = false
 			root.AssemblyLinearVelocity = Vector3.zero
 			root.AssemblyAngularVelocity = Vector3.zero
+			return
 		else
 			clearTitanLock()
 			forceMainPoint()
@@ -461,26 +472,15 @@ RunService.Stepped:Connect(function()
 		end
 	end
 
-	if not LockedTitan then
-		local titan = Enemies:FindFirstChild("TitanZombie")
-		if titan then
-			lockTitan(titan)
-		end
-	end
+	TrackingTitan = false
 
-	if not LockedTitan then
-		TrackingTitan = false
-
-		if not Busy then
-			if (root.Position - MAIN_POINT.Position).Magnitude > 0.05 then
-				forceMainPoint()
-			else
-				root.AssemblyLinearVelocity = Vector3.zero
-				root.AssemblyAngularVelocity = Vector3.zero
-				root.CFrame = MAIN_POINT
-				root.Anchored = true
-			end
-		end
+	if (root.Position - MAIN_POINT.Position).Magnitude > 0.05 then
+		forceMainPoint()
+	else
+		Character:PivotTo(MAIN_POINT)
+		root.AssemblyLinearVelocity = Vector3.zero
+		root.AssemblyAngularVelocity = Vector3.zero
+		root.Anchored = true
 	end
 end)
 
