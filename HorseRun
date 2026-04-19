@@ -21,14 +21,14 @@ local GetWinsRemote = KnitServices
     :WaitForChild("RE", 9e9)
     :WaitForChild("GetWinsEvent", 9e9)
 
-local WinGatesFolder = workspace:WaitForChild("Areas")
-    :WaitForChild("Area_1")
-    :WaitForChild("WinGates")
-
 local FightActivePart = workspace:WaitForChild("Areas")
     :WaitForChild("Area_1")
     :WaitForChild("FightParts")
     :WaitForChild("FightActivePart")
+
+local WinGatesFolder = workspace:WaitForChild("Areas")
+    :WaitForChild("Area_1")
+    :WaitForChild("WinGates")
 
 local Treadmills = {
     {0, "Treadmill_1_1"},
@@ -45,13 +45,9 @@ local Treadmills = {
     {5000000000, "Treadmill_1_12"},
 }
 
-local AutoTrainEnabled = true
-local AutoFightEnabled = true
-local AutoWinGateEnabled = true
-
-local TrainDelay = 0.05
-local FightDelay = 0.5
-local WinBurstDelay = 0.1
+local TrainDelay = 0.03
+local FightDelay = 0.35
+local WinBurstDelay = 0.08
 
 local function getCharacter()
     return LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
@@ -84,7 +80,6 @@ end
 local function fireAllGatesAtOnce()
     for i = 1, 16 do
         local gate = WinGatesFolder:FindFirstChild("WinGate_" .. i)
-
         if gate then
             task.spawn(function()
                 pcall(function()
@@ -97,14 +92,11 @@ end
 
 task.spawn(function()
     while true do
-        if AutoTrainEnabled then
-            local power = PowerStat.Value
-            local treadmill = getBestTreadmill(power)
+        local treadmill = getBestTreadmill(PowerStat.Value)
 
-            pcall(function()
-                RunTrainRemote:FireServer(treadmill)
-            end)
-        end
+        pcall(function()
+            RunTrainRemote:FireServer(treadmill)
+        end)
 
         task.wait(TrainDelay)
     end
@@ -112,11 +104,9 @@ end)
 
 task.spawn(function()
     while true do
-        if AutoFightEnabled then
-            pcall(function()
-                teleportToFightPart()
-            end)
-        end
+        pcall(function()
+            teleportToFightPart()
+        end)
 
         task.wait(FightDelay)
     end
@@ -124,10 +114,7 @@ end)
 
 task.spawn(function()
     while true do
-        if AutoWinGateEnabled then
-            fireAllGatesAtOnce()
-        end
-
+        fireAllGatesAtOnce()
         task.wait(WinBurstDelay)
     end
 end)
