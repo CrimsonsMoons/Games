@@ -51,7 +51,7 @@ local AutoTrainEnabled = true
 local AutoJoinEnabled = true
 local AutoWinGateEnabled = true
 
-local TrainDelay = 0.5
+local TrainDelay = 0.1
 local JoinDelay = 1
 local WinBurstDelay = 0.1
 
