@@ -1,0 +1,404 @@
+--// Settings
+local ATTACK_RANGE = 120
+local SCAN_RANGE = math.huge
+local ATTACK_DELAY = 0.15
+local MAX_MOBS_PER_ATTACK = 3
+
+local MOVE_SPEED = 80 -- lower = slower, higher = faster
+local ABOVE_ENEMY_HEIGHT = 15 -- stay 15 studs above enemy
+local STOP_DISTANCE = 2 -- horizontal distance from enemy
+local TARGET_REFRESH_RATE = 0.08
+
+local FACE_TARGET = true
+local ZERO_VELOCITY = true
+
+--// Services
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
+
+--// Player
+local LocalPlayer = Players.LocalPlayer
+
+--// Remote
+local PlayerAttack = ReplicatedStorage
+    :WaitForChild("Systems", 9e9)
+    :WaitForChild("Combat", 9e9)
+    :WaitForChild("PlayerAttack", 9e9)
+
+--// Folder
+local MobsFolder = Workspace:WaitForChild("Mobs", 9e9)
+
+--// State
+local CurrentTarget = nil
+local LastAttack = 0
+local LastTargetRefresh = 0
+
+local function getCharacter()
+    return LocalPlayer.Character
+end
+
+local function getHumanoid()
+    local character = getCharacter()
+    return character and character:FindFirstChildWhichIsA("Humanoid")
+end
+
+local function getMyRoot()
+    local character = getCharacter()
+    if not character or not character.Parent then
+        return nil
+    end
+
+    return character:FindFirstChild("HumanoidRootPart")
+        or character:FindFirstChild("RootPart")
+        or character.PrimaryPart
+end
+
+local function isPlayerAlive()
+    local humanoid = getHumanoid()
+    return humanoid and humanoid.Health > 0
+end
+
+local function getMobRoot(mob)
+    if not mob or not mob.Parent then
+        return nil
+    end
+
+    return mob:FindFirstChild("HumanoidRootPart")
+        or mob:FindFirstChild("RootPart")
+        or mob:FindFirstChild("Torso")
+        or mob:FindFirstChild("UpperTorso")
+        or mob.PrimaryPart
+        or mob:FindFirstChildWhichIsA("BasePart")
+end
+
+local function getMobHumanoid(mob)
+    if not mob or not mob.Parent then
+        return nil
+    end
+
+    return mob:FindFirstChildWhichIsA("Humanoid")
+end
+
+local function isOwnedByPlayer(mob)
+    if not mob or not mob.Parent then
+        return true
+    end
+
+    local owner =
+        mob:GetAttribute("Owner")
+        or mob:GetAttribute("owner")
+        or mob:GetAttribute("OwnerId")
+        or mob:GetAttribute("ownerId")
+        or mob:GetAttribute("UserId")
+        or mob:GetAttribute("userId")
+
+    if owner == nil or owner == "" or owner == 0 then
+        return false
+    end
+
+    if typeof(owner) == "Instance" then
+        if owner:IsA("Player") then
+            return true
+        end
+
+        if owner:IsA("Model") then
+            return Players:GetPlayerFromCharacter(owner) ~= nil
+        end
+    end
+
+    if typeof(owner) == "number" then
+        return Players:GetPlayerByUserId(owner) ~= nil
+    end
+
+    if typeof(owner) == "string" then
+        local loweredOwner = string.lower(owner)
+
+        for _, player in ipairs(Players:GetPlayers()) do
+            if loweredOwner == string.lower(player.Name)
+                or loweredOwner == string.lower(player.DisplayName)
+                or loweredOwner == tostring(player.UserId)
+            then
+                return true
+            end
+        end
+    end
+
+    if owner == true then
+        return true
+    end
+
+    return false
+end
+
+local function getHealthValue(mob)
+    if not mob or not mob.Parent then
+        return nil
+    end
+
+    local humanoid = getMobHumanoid(mob)
+    if humanoid then
+        return humanoid.Health
+    end
+
+    local healthAttributes = {
+        "Health",
+        "NewHealth",
+        "HP",
+        "CurrentHealth",
+        "currentHealth",
+        "health",
+        "hp"
+    }
+
+    for _, attributeName in ipairs(healthAttributes) do
+        local value = mob:GetAttribute(attributeName)
+
+        if typeof(value) == "number" then
+            return value
+        end
+    end
+
+    return nil
+end
+
+local function isMobAlive(mob)
+    if not mob or not mob.Parent then
+        return false
+    end
+
+    local health = getHealthValue(mob)
+
+    if typeof(health) == "number" and health <= 0 then
+        return false
+    end
+
+    local dead =
+        mob:GetAttribute("Dead")
+        or mob:GetAttribute("dead")
+        or mob:GetAttribute("Killed")
+        or mob:GetAttribute("killed")
+
+    if dead == true then
+        return false
+    end
+
+    return true
+end
+
+local function isValidMob(mob)
+    if not mob or not mob.Parent then
+        return false
+    end
+
+    if not mob:IsA("Model") then
+        return false
+    end
+
+    if isOwnedByPlayer(mob) then
+        return false
+    end
+
+    if not isMobAlive(mob) then
+        return false
+    end
+
+    if not getMobRoot(mob) then
+        return false
+    end
+
+    return true
+end
+
+local function getMobDistance(mob, myRoot)
+    local mobRoot = getMobRoot(mob)
+    if not mobRoot or not myRoot then
+        return math.huge
+    end
+
+    return (mobRoot.Position - myRoot.Position).Magnitude
+end
+
+local function getSortedMobs(maxRange)
+    local myRoot = getMyRoot()
+    if not myRoot then
+        return {}
+    end
+
+    local list = {}
+
+    for _, mob in ipairs(MobsFolder:GetChildren()) do
+        if isValidMob(mob) then
+            local mobRoot = getMobRoot(mob)
+
+            if mobRoot then
+                local distance = (mobRoot.Position - myRoot.Position).Magnitude
+
+                if distance <= maxRange then
+                    list[#list + 1] = {
+                        Mob = mob,
+                        Root = mobRoot,
+                        Distance = distance
+                    }
+                end
+            end
+        end
+    end
+
+    table.sort(list, function(a, b)
+        return a.Distance < b.Distance
+    end)
+
+    return list
+end
+
+local function getNearestMob()
+    local sorted = getSortedMobs(SCAN_RANGE)
+
+    for _, data in ipairs(sorted) do
+        if isValidMob(data.Mob) then
+            return data.Mob
+        end
+    end
+
+    return nil
+end
+
+local function getAttackMobs()
+    local sorted = getSortedMobs(ATTACK_RANGE)
+    local attackMobs = {}
+
+    for i = 1, math.min(MAX_MOBS_PER_ATTACK, #sorted) do
+        local mob = sorted[i].Mob
+
+        if isValidMob(mob) then
+            attackMobs[#attackMobs + 1] = mob
+        end
+    end
+
+    return attackMobs
+end
+
+local function getTargetPositionAboveMob(mob)
+    local mobRoot = getMobRoot(mob)
+    if not mobRoot then
+        return nil
+    end
+
+    return mobRoot.Position + Vector3.new(0, ABOVE_ENEMY_HEIGHT, 0)
+end
+
+local function cframeFlyAboveMob(dt, mob)
+    if not isPlayerAlive() then
+        return
+    end
+
+    if not isValidMob(mob) then
+        return
+    end
+
+    local root = getMyRoot()
+    local mobRoot = getMobRoot(mob)
+
+    if not root or not mobRoot then
+        return
+    end
+
+    local targetPosition = getTargetPositionAboveMob(mob)
+    if not targetPosition then
+        return
+    end
+
+    local currentPosition = root.Position
+    local offset = targetPosition - currentPosition
+    local distance = offset.Magnitude
+
+    if ZERO_VELOCITY then
+        root.AssemblyLinearVelocity = Vector3.zero
+        root.AssemblyAngularVelocity = Vector3.zero
+    end
+
+    if distance <= STOP_DISTANCE then
+        if FACE_TARGET then
+            root.CFrame = CFrame.lookAt(
+                targetPosition,
+                mobRoot.Position
+            )
+        else
+            root.CFrame = CFrame.new(targetPosition)
+        end
+
+        return
+    end
+
+    local direction = offset.Unit
+    local moveAmount = math.min(MOVE_SPEED * dt, distance)
+
+    local newPosition = currentPosition + direction * moveAmount
+
+    if FACE_TARGET then
+        root.CFrame = CFrame.lookAt(
+            newPosition,
+            mobRoot.Position
+        )
+    else
+        root.CFrame = CFrame.new(newPosition)
+    end
+end
+
+local function refreshTarget()
+    if isValidMob(CurrentTarget) then
+        local nearest = getNearestMob()
+        local root = getMyRoot()
+
+        if nearest and root then
+            local currentDistance = getMobDistance(CurrentTarget, root)
+            local nearestDistance = getMobDistance(nearest, root)
+
+            -- switch if a new mob is much closer
+            if nearest ~= CurrentTarget and nearestDistance + 8 < currentDistance then
+                CurrentTarget = nearest
+            end
+        end
+
+        return
+    end
+
+    CurrentTarget = getNearestMob()
+end
+
+RunService.PreSimulation:Connect(function(dt)
+    local root = getMyRoot()
+
+    if not root or not isPlayerAlive() then
+        CurrentTarget = nil
+        return
+    end
+
+    if tick() - LastTargetRefresh >= TARGET_REFRESH_RATE then
+        LastTargetRefresh = tick()
+
+        pcall(function()
+            refreshTarget()
+        end)
+    end
+
+    if CurrentTarget and isValidMob(CurrentTarget) then
+        pcall(function()
+            cframeFlyAboveMob(dt, CurrentTarget)
+        end)
+    end
+
+    if tick() - LastAttack >= ATTACK_DELAY then
+        LastAttack = tick()
+
+        local success, mobs = pcall(getAttackMobs)
+
+        if success and mobs and #mobs > 0 then
+            pcall(function()
+                PlayerAttack:FireServer(mobs)
+            end)
+        end
+    end
+end)
