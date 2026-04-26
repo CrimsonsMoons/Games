@@ -1,6 +1,6 @@
 --//==================================================
---// FIXED SMART MOB AURA + CFRAME FLY ABOVE + NOCLIP
---// 4 closest mobs | safer attack delay
+--// STABLE MOB AURA + CFRAME FLY ABOVE + NOCLIP
+--// Auto-stabilizes if 4 mobs breaks
 --//==================================================
 
 --// Settings
@@ -14,8 +14,9 @@ local DODGE_ENABLED = true
 local DODGE_RADIUS = 10
 local DODGE_SPEED = 3
 
-local ATTACK_DELAY = 0.18
-local MAX_MOBS_PER_ATTACK = 4
+local ATTACK_DELAY = 0.25 -- safer than 0.18
+local START_MOBS_PER_ATTACK = 4
+local MIN_MOBS_PER_ATTACK = 1
 local ATTACK_RANGE = math.huge
 
 local NOCLIP = true
@@ -43,8 +44,10 @@ local MobsFolder = Workspace:WaitForChild("Mobs", 9e9)
 
 --// State
 local CurrentTarget = nil
-local LastAttack = 0
 local DodgeAngle = 0
+local CurrentMobLimit = START_MOBS_PER_ATTACK
+local FailCount = 0
+local LastGoodAttack = tick()
 
 --// Player helpers
 local function getCharacter()
@@ -215,7 +218,7 @@ local function isValidMob(mob)
     return true
 end
 
---// Smart mob scan
+--// Stable scan
 local function getAllValidMobs()
     local root = getRoot()
     if not root then
@@ -223,40 +226,23 @@ local function getAllValidMobs()
     end
 
     local found = {}
-    local used = {}
 
+    -- Only direct children. Descendant scanning was probably causing bad/nested mobs.
     for _, mob in ipairs(MobsFolder:GetChildren()) do
-        if isValidMob(mob) and not used[mob] then
-            used[mob] = true
-
+        if isValidMob(mob) then
             local mobRoot = getMobRoot(mob)
-            local distance = (mobRoot.Position - root.Position).Magnitude
 
-            if distance <= ATTACK_RANGE then
-                found[#found + 1] = {
-                    Mob = mob,
-                    Root = mobRoot,
-                    Distance = distance,
-                    Health = getMobHealth(mob) or math.huge
-                }
-            end
-        end
-    end
+            if mobRoot and mobRoot.Parent then
+                local distance = (mobRoot.Position - root.Position).Magnitude
 
-    for _, obj in ipairs(MobsFolder:GetDescendants()) do
-        if obj:IsA("Model") and isValidMob(obj) and not used[obj] then
-            used[obj] = true
-
-            local mobRoot = getMobRoot(obj)
-            local distance = (mobRoot.Position - root.Position).Magnitude
-
-            if distance <= ATTACK_RANGE then
-                found[#found + 1] = {
-                    Mob = obj,
-                    Root = mobRoot,
-                    Distance = distance,
-                    Health = getMobHealth(obj) or math.huge
-                }
+                if distance <= ATTACK_RANGE then
+                    found[#found + 1] = {
+                        Mob = mob,
+                        Root = mobRoot,
+                        Distance = distance,
+                        Health = getMobHealth(mob) or math.huge
+                    }
+                end
             end
         end
     end
@@ -272,13 +258,14 @@ local function getAllValidMobs()
     return found
 end
 
-local function getClosestMobs()
+local function getClosestMobs(limit)
     local sorted = getAllValidMobs()
     local mobs = {}
 
-    for i = 1, math.min(MAX_MOBS_PER_ATTACK, #sorted) do
+    for i = 1, math.min(limit, #sorted) do
         local mob = sorted[i].Mob
 
+        -- Recheck right before adding
         if isValidMob(mob) then
             mobs[#mobs + 1] = mob
         end
@@ -288,7 +275,7 @@ local function getClosestMobs()
 end
 
 local function getNearestMob()
-    local _, sorted = getClosestMobs()
+    local _, sorted = getClosestMobs(1)
 
     if sorted[1] and isValidMob(sorted[1].Mob) then
         return sorted[1].Mob
@@ -382,21 +369,60 @@ local function flyAboveMob(dt, mob)
     root.CFrame = CFrame.lookAt(newPosition, mobRoot.Position)
 end
 
---// Attack
+--// Adaptive attack
+local function lowerMobLimit()
+    if CurrentMobLimit > MIN_MOBS_PER_ATTACK then
+        CurrentMobLimit -= 1
+        warn("[MobAura] Lowering mob limit to:", CurrentMobLimit)
+    end
+end
+
 local function attackMobs()
     if not ENABLED then
         return
     end
 
-    local mobs = getClosestMobs()
+    local mobs = getClosestMobs(CurrentMobLimit)
 
     if #mobs <= 0 then
         return
     end
 
-    pcall(function()
-        PlayerAttack:FireServer(mobs)
+    -- Final clean check
+    local clean = {}
+
+    for _, mob in ipairs(mobs) do
+        if isValidMob(mob) then
+            clean[#clean + 1] = mob
+        end
+    end
+
+    if #clean <= 0 then
+        return
+    end
+
+    local success = pcall(function()
+        PlayerAttack:FireServer(clean)
     end)
+
+    if success then
+        FailCount = 0
+        LastGoodAttack = tick()
+    else
+        FailCount += 1
+        warn("[MobAura] Attack failed:", FailCount)
+
+        if FailCount >= 2 then
+            FailCount = 0
+            lowerMobLimit()
+        end
+    end
+
+    -- If it goes too long without a clean attack, lower the count
+    if tick() - LastGoodAttack > 5 then
+        LastGoodAttack = tick()
+        lowerMobLimit()
+    end
 end
 
 --// Toggle
@@ -435,7 +461,7 @@ RunService.PreSimulation:Connect(function(dt)
     end
 end)
 
---// Separate attack loop
+--// Attack loop
 task.spawn(function()
     while task.wait(ATTACK_DELAY) do
         if ENABLED then
