@@ -1,0 +1,993 @@
+--//==================================================
+--// SMART MOB AURA V3
+--// DungeonRooms pathing + any-range tween + 100 radius attack
+--//==================================================
+
+--//==================================================
+--// SETTINGS
+--//==================================================
+local ENABLED = true
+
+-- Movement
+local MOVE_SPEED = 175
+local ABOVE_HEIGHT = 35
+local ARRIVE_DISTANCE = 2
+local TWEEN_RANGE = math.huge
+
+-- Dodge/orbit
+local DODGE_ENABLED = true
+local DODGE_RADIUS = 10
+local DODGE_SPEED = 3
+
+-- Attack
+local START_MOBS_PER_ATTACK = 5
+local MIN_MOBS_PER_ATTACK = 2
+local ATTACK_RANGE = 100
+local ATTACK_DELAY = 0.35
+local SOLO_ATTACK_DELAY = 0.31
+local OVERLAP_ATTACK_LOOPS = true
+
+-- Dungeon room following
+local USE_DUNGEON_ROOMS = true
+local ROOM_SEARCH_AHEAD = 4 -- checks current room + next 4 rooms
+local ROOM_SWITCH_DISTANCE = 130 -- if near next room, allow moving forward
+local ROOM_PADDING = 35 -- extra room bounds padding for mob detection
+
+-- Safety
+local NOCLIP = true
+local ANTI_SIT = true
+local BLACKLIST_PLAYER_OWNED = true
+
+-- Controls
+local TOGGLE_KEY = Enum.KeyCode.N
+local GUI_TOGGLE_KEY = Enum.KeyCode.RightControl
+
+--//==================================================
+--// SERVICES
+--//==================================================
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local Workspace = game:GetService("Workspace")
+
+local LocalPlayer = Players.LocalPlayer
+
+--//==================================================
+--// REMOTE / FOLDERS
+--//==================================================
+local PlayerAttack = ReplicatedStorage
+    :WaitForChild("Systems", 9e9)
+    :WaitForChild("Combat", 9e9)
+    :WaitForChild("PlayerAttack", 9e9)
+
+local MobsFolder = Workspace:WaitForChild("Mobs", 9e9)
+local DungeonRoomsFolder = Workspace:FindFirstChild("DungeonRooms")
+
+--//==================================================
+--// STATE
+--//==================================================
+local CurrentTarget = nil
+local CurrentRoomIndex = 1
+local DodgeAngle = 0
+local CurrentMobLimit = START_MOBS_PER_ATTACK
+
+local FailCount = 0
+local LastGoodAttack = tick()
+local LastTargetRefresh = 0
+local TargetRefreshRate = 0.12
+
+local LastDetectedCount = 0
+local LastAttackCount = 0
+local LastTargetName = "None"
+local LastRoomName = "None"
+local LastStatus = "Loaded"
+
+local AttackBusy = false
+
+--//==================================================
+--// PLAYER HELPERS
+--//==================================================
+local function getCharacter()
+    return LocalPlayer.Character
+end
+
+local function getHumanoid()
+    local character = getCharacter()
+    return character and character:FindFirstChildWhichIsA("Humanoid")
+end
+
+local function getRoot()
+    local character = getCharacter()
+    if not character or not character.Parent then
+        return nil
+    end
+
+    return character:FindFirstChild("HumanoidRootPart")
+        or character:FindFirstChild("RootPart")
+        or character.PrimaryPart
+end
+
+local function isPlayerAlive()
+    local humanoid = getHumanoid()
+    return humanoid and humanoid.Health > 0
+end
+
+--//==================================================
+--// MOB HELPERS
+--//==================================================
+local function getMobRoot(mob)
+    if not mob or not mob.Parent then
+        return nil
+    end
+
+    return mob:FindFirstChild("HumanoidRootPart")
+        or mob:FindFirstChild("RootPart")
+        or mob:FindFirstChild("Torso")
+        or mob:FindFirstChild("UpperTorso")
+        or mob.PrimaryPart
+        or mob:FindFirstChildWhichIsA("BasePart", true)
+end
+
+local function getMobHealth(mob)
+    if not mob or not mob.Parent then
+        return nil
+    end
+
+    local humanoid = mob:FindFirstChildWhichIsA("Humanoid", true)
+    if humanoid then
+        return humanoid.Health
+    end
+
+    local attrs = {
+        "Health",
+        "health",
+        "HP",
+        "hp",
+        "NewHealth",
+        "CurrentHealth",
+        "currentHealth",
+        "Life",
+        "life"
+    }
+
+    for _, attr in ipairs(attrs) do
+        local value = mob:GetAttribute(attr)
+        if typeof(value) == "number" then
+            return value
+        end
+    end
+
+    return nil
+end
+
+local function isDeadByAttribute(mob)
+    local attrs = {
+        "Dead",
+        "dead",
+        "Killed",
+        "killed",
+        "IsDead",
+        "isDead",
+        "Died",
+        "died"
+    }
+
+    for _, attr in ipairs(attrs) do
+        if mob:GetAttribute(attr) == true then
+            return true
+        end
+    end
+
+    return false
+end
+
+local function isOwnedByPlayer(mob)
+    if not BLACKLIST_PLAYER_OWNED then
+        return false
+    end
+
+    if not mob or not mob.Parent then
+        return true
+    end
+
+    local owner =
+        mob:GetAttribute("Owner")
+        or mob:GetAttribute("owner")
+        or mob:GetAttribute("OwnerId")
+        or mob:GetAttribute("ownerId")
+        or mob:GetAttribute("UserId")
+        or mob:GetAttribute("userId")
+        or mob:GetAttribute("Summoner")
+        or mob:GetAttribute("summoner")
+
+    if owner == nil or owner == "" or owner == 0 then
+        return false
+    end
+
+    if typeof(owner) == "Instance" then
+        if owner:IsA("Player") then
+            return true
+        end
+
+        if owner:IsA("Model") and Players:GetPlayerFromCharacter(owner) then
+            return true
+        end
+    end
+
+    if typeof(owner) == "number" then
+        return Players:GetPlayerByUserId(owner) ~= nil
+    end
+
+    if typeof(owner) == "string" then
+        local lowerOwner = string.lower(owner)
+
+        for _, player in ipairs(Players:GetPlayers()) do
+            if lowerOwner == string.lower(player.Name)
+                or lowerOwner == string.lower(player.DisplayName)
+                or lowerOwner == tostring(player.UserId)
+            then
+                return true
+            end
+        end
+    end
+
+    return owner == true
+end
+
+local function isValidMob(mob)
+    if not mob or not mob.Parent then
+        return false
+    end
+
+    if not mob:IsA("Model") then
+        return false
+    end
+
+    if isOwnedByPlayer(mob) then
+        return false
+    end
+
+    if isDeadByAttribute(mob) then
+        return false
+    end
+
+    local health = getMobHealth(mob)
+    if typeof(health) == "number" and health <= 0 then
+        return false
+    end
+
+    if not getMobRoot(mob) then
+        return false
+    end
+
+    return true
+end
+
+--//==================================================
+--// DUNGEON ROOM HELPERS
+--//==================================================
+local function getRoomRoot(room)
+    if not room or not room.Parent then
+        return nil
+    end
+
+    if room:IsA("BasePart") then
+        return room
+    end
+
+    if room:IsA("Model") then
+        return room.PrimaryPart
+            or room:FindFirstChild("Room")
+            or room:FindFirstChild("Floor")
+            or room:FindFirstChild("Center")
+            or room:FindFirstChildWhichIsA("BasePart", true)
+    end
+
+    return room:FindFirstChildWhichIsA("BasePart", true)
+end
+
+local function getRoomNumber(room)
+    local number = tonumber(room.Name)
+    if number then
+        return number
+    end
+
+    local fromAttribute =
+        room:GetAttribute("Room")
+        or room:GetAttribute("RoomNumber")
+        or room:GetAttribute("Index")
+        or room:GetAttribute("room")
+        or room:GetAttribute("index")
+
+    if typeof(fromAttribute) == "number" then
+        return fromAttribute
+    end
+
+    return math.huge
+end
+
+local function getSortedRooms()
+    DungeonRoomsFolder = Workspace:FindFirstChild("DungeonRooms")
+
+    if not DungeonRoomsFolder then
+        return {}
+    end
+
+    local rooms = {}
+
+    for _, room in ipairs(DungeonRoomsFolder:GetChildren()) do
+        local root = getRoomRoot(room)
+
+        if root then
+            rooms[#rooms + 1] = {
+                Room = room,
+                Root = root,
+                Number = getRoomNumber(room)
+            }
+        end
+    end
+
+    table.sort(rooms, function(a, b)
+        return a.Number < b.Number
+    end)
+
+    return rooms
+end
+
+local function getRoomBounds(room)
+    if not room then
+        return nil
+    end
+
+    if room:IsA("Model") then
+        local cf, size = room:GetBoundingBox()
+        return cf, size
+    end
+
+    local root = getRoomRoot(room)
+    if root then
+        return root.CFrame, root.Size
+    end
+
+    return nil
+end
+
+local function isPositionInsideRoom(position, room)
+    local cf, size = getRoomBounds(room)
+    if not cf or not size then
+        return false
+    end
+
+    local localPos = cf:PointToObjectSpace(position)
+
+    return math.abs(localPos.X) <= (size.X / 2 + ROOM_PADDING)
+        and math.abs(localPos.Y) <= (size.Y / 2 + ROOM_PADDING)
+        and math.abs(localPos.Z) <= (size.Z / 2 + ROOM_PADDING)
+end
+
+local function getNearestRoomIndex()
+    local root = getRoot()
+    if not root then
+        return CurrentRoomIndex
+    end
+
+    local rooms = getSortedRooms()
+    if #rooms == 0 then
+        return CurrentRoomIndex
+    end
+
+    local bestIndex = CurrentRoomIndex
+    local bestDistance = math.huge
+
+    for index, data in ipairs(rooms) do
+        local distance = (data.Root.Position - root.Position).Magnitude
+
+        if distance < bestDistance then
+            bestDistance = distance
+            bestIndex = index
+        end
+    end
+
+    return bestIndex
+end
+
+local function refreshCurrentRoomIndex()
+    local rooms = getSortedRooms()
+    if #rooms == 0 then
+        LastRoomName = "None"
+        return
+    end
+
+    local nearestIndex = getNearestRoomIndex()
+
+    if nearestIndex > CurrentRoomIndex then
+        CurrentRoomIndex = nearestIndex
+    elseif math.abs(nearestIndex - CurrentRoomIndex) <= 1 then
+        CurrentRoomIndex = nearestIndex
+    end
+
+    local roomData = rooms[CurrentRoomIndex]
+    if roomData then
+        LastRoomName = tostring(roomData.Room.Name)
+    end
+end
+
+--//==================================================
+--// SMART MOB CANDIDATES
+--//==================================================
+local function getTopMobModel(model)
+    if not model or not model:IsA("Model") then
+        return nil
+    end
+
+    local current = model
+
+    while current.Parent and current.Parent ~= MobsFolder do
+        if current.Parent:IsA("Model") then
+            current = current.Parent
+        else
+            break
+        end
+    end
+
+    if current and current:IsDescendantOf(MobsFolder) then
+        return current
+    end
+
+    return model
+end
+
+local function getMobCandidates()
+    local candidates = {}
+    local used = {}
+
+    for _, obj in ipairs(MobsFolder:GetChildren()) do
+        if obj:IsA("Model") then
+            local mob = getTopMobModel(obj)
+            if mob and not used[mob] then
+                used[mob] = true
+                candidates[#candidates + 1] = mob
+            end
+        end
+    end
+
+    for _, obj in ipairs(MobsFolder:GetDescendants()) do
+        if obj:IsA("Model") then
+            local mob = getTopMobModel(obj)
+            if mob and not used[mob] then
+                used[mob] = true
+                candidates[#candidates + 1] = mob
+            end
+        end
+    end
+
+    return candidates
+end
+
+local function getSortedMobs(range)
+    local root = getRoot()
+    if not root then
+        return {}
+    end
+
+    local origin = root.Position
+    local found = {}
+
+    for _, mob in ipairs(getMobCandidates()) do
+        if isValidMob(mob) then
+            local mobRoot = getMobRoot(mob)
+
+            if mobRoot and mobRoot.Parent then
+                local distance = (mobRoot.Position - origin).Magnitude
+
+                if distance <= range then
+                    found[#found + 1] = {
+                        Mob = mob,
+                        Root = mobRoot,
+                        Distance = distance,
+                        Health = getMobHealth(mob) or math.huge
+                    }
+                end
+            end
+        end
+    end
+
+    table.sort(found, function(a, b)
+        if math.abs(a.Distance - b.Distance) <= 4 then
+            return a.Health < b.Health
+        end
+
+        return a.Distance < b.Distance
+    end)
+
+    return found
+end
+
+local function getSortedMobsForDungeonTween()
+    if not USE_DUNGEON_ROOMS then
+        return getSortedMobs(TWEEN_RANGE)
+    end
+
+    refreshCurrentRoomIndex()
+
+    local rooms = getSortedRooms()
+    local allMobs = getSortedMobs(TWEEN_RANGE)
+
+    if #rooms == 0 then
+        return allMobs
+    end
+
+    local roomPriority = {}
+
+    for index, data in ipairs(rooms) do
+        if index >= CurrentRoomIndex and index <= CurrentRoomIndex + ROOM_SEARCH_AHEAD then
+            roomPriority[data.Room] = index - CurrentRoomIndex
+        end
+    end
+
+    local prioritized = {}
+
+    for _, mobData in ipairs(allMobs) do
+        local assignedPriority = math.huge
+
+        for room, priority in pairs(roomPriority) do
+            if isPositionInsideRoom(mobData.Root.Position, room) then
+                assignedPriority = priority
+                break
+            end
+        end
+
+        if assignedPriority < math.huge then
+            mobData.RoomPriority = assignedPriority
+            prioritized[#prioritized + 1] = mobData
+        end
+    end
+
+    if #prioritized == 0 then
+        return allMobs
+    end
+
+    table.sort(prioritized, function(a, b)
+        if a.RoomPriority ~= b.RoomPriority then
+            return a.RoomPriority < b.RoomPriority
+        end
+
+        if math.abs(a.Distance - b.Distance) <= 4 then
+            return a.Health < b.Health
+        end
+
+        return a.Distance < b.Distance
+    end)
+
+    return prioritized
+end
+
+local function getClosestAttackMobs()
+    local sorted = getSortedMobs(ATTACK_RANGE)
+    local mobs = {}
+
+    LastDetectedCount = #sorted
+
+    for i = 1, math.min(CurrentMobLimit, #sorted) do
+        local mob = sorted[i].Mob
+
+        if isValidMob(mob) then
+            mobs[#mobs + 1] = mob
+        end
+    end
+
+    return mobs, sorted
+end
+
+local function getNearestTweenMob()
+    local sorted = getSortedMobsForDungeonTween()
+
+    if sorted[1] and isValidMob(sorted[1].Mob) then
+        return sorted[1].Mob
+    end
+
+    return nil
+end
+
+--//==================================================
+--// SAFETY
+--//==================================================
+local function applyNoClip()
+    if not NOCLIP then
+        return
+    end
+
+    local character = getCharacter()
+    if not character then
+        return
+    end
+
+    for _, obj in ipairs(character:GetDescendants()) do
+        if obj:IsA("BasePart") then
+            obj.CanCollide = false
+        end
+    end
+end
+
+local function applyAntiSit()
+    if not ANTI_SIT then
+        return
+    end
+
+    local humanoid = getHumanoid()
+
+    if humanoid then
+        humanoid.Sit = false
+        humanoid.PlatformStand = false
+    end
+end
+
+local function clearVelocity(root)
+    if not root then
+        return
+    end
+
+    root.AssemblyLinearVelocity = Vector3.zero
+    root.AssemblyAngularVelocity = Vector3.zero
+end
+
+--//==================================================
+--// MOVEMENT
+--//==================================================
+local function flyAboveMob(dt, mob)
+    if not ENABLED then
+        return
+    end
+
+    if not isPlayerAlive() or not isValidMob(mob) then
+        return
+    end
+
+    local root = getRoot()
+    local mobRoot = getMobRoot(mob)
+
+    if not root or not mobRoot then
+        return
+    end
+
+    DodgeAngle += dt * DODGE_SPEED
+
+    local dodgeOffset = Vector3.zero
+
+    if DODGE_ENABLED then
+        dodgeOffset = Vector3.new(
+            math.cos(DodgeAngle) * DODGE_RADIUS,
+            0,
+            math.sin(DodgeAngle) * DODGE_RADIUS
+        )
+    end
+
+    local targetPosition =
+        mobRoot.Position
+        + Vector3.new(0, ABOVE_HEIGHT, 0)
+        + dodgeOffset
+
+    local currentPosition = root.Position
+    local offset = targetPosition - currentPosition
+    local distance = offset.Magnitude
+
+    clearVelocity(root)
+
+    local newPosition
+
+    if distance <= ARRIVE_DISTANCE then
+        newPosition = targetPosition
+    else
+        local direction = offset.Unit
+        local moveAmount = math.min(MOVE_SPEED * dt, distance)
+        newPosition = currentPosition + direction * moveAmount
+    end
+
+    root.CFrame = CFrame.lookAt(newPosition, mobRoot.Position)
+
+    LastTargetName = mob.Name
+end
+
+local function refreshTarget()
+    if not ENABLED then
+        CurrentTarget = nil
+        return
+    end
+
+    local best = getNearestTweenMob()
+
+    if not isValidMob(CurrentTarget) then
+        CurrentTarget = best
+        return
+    end
+
+    if best and best ~= CurrentTarget then
+        local root = getRoot()
+        local currentRoot = getMobRoot(CurrentTarget)
+        local bestRoot = getMobRoot(best)
+
+        if root and currentRoot and bestRoot then
+            local currentDistance = (currentRoot.Position - root.Position).Magnitude
+            local bestDistance = (bestRoot.Position - root.Position).Magnitude
+
+            if bestDistance + 12 < currentDistance then
+                CurrentTarget = best
+            end
+        end
+    end
+end
+
+--//==================================================
+--// ATTACK
+--//==================================================
+local function lowerMobLimit()
+    if CurrentMobLimit > MIN_MOBS_PER_ATTACK then
+        CurrentMobLimit -= 1
+        LastStatus = "Lowered mob limit to " .. tostring(CurrentMobLimit)
+        warn("[SmartAura] " .. LastStatus)
+    end
+end
+
+local function recoverMobLimit()
+    if CurrentMobLimit < START_MOBS_PER_ATTACK and tick() - LastGoodAttack > 8 then
+        CurrentMobLimit += 1
+        LastGoodAttack = tick()
+        LastStatus = "Recovered mob limit to " .. tostring(CurrentMobLimit)
+        warn("[SmartAura] " .. LastStatus)
+    end
+end
+
+local function attackMobs(workerName)
+    if not ENABLED or AttackBusy then
+        return 0
+    end
+
+    AttackBusy = true
+
+    local mobs = getClosestAttackMobs()
+
+    if #mobs <= 0 then
+        LastAttackCount = 0
+        AttackBusy = false
+        return 0
+    end
+
+    local clean = {}
+
+    for _, mob in ipairs(mobs) do
+        if isValidMob(mob) then
+            clean[#clean + 1] = mob
+        end
+    end
+
+    if #clean <= 0 then
+        LastAttackCount = 0
+        AttackBusy = false
+        return 0
+    end
+
+    local success = pcall(function()
+        PlayerAttack:FireServer(clean)
+    end)
+
+    LastAttackCount = #clean
+
+    if success then
+        FailCount = 0
+        LastGoodAttack = tick()
+        LastStatus = workerName .. " fired " .. tostring(#clean)
+    else
+        FailCount += 1
+        LastStatus = workerName .. " failed"
+
+        if FailCount >= 2 then
+            FailCount = 0
+            lowerMobLimit()
+        end
+    end
+
+    AttackBusy = false
+    return #clean
+end
+
+--//==================================================
+--// GUI
+--//==================================================
+local Gui
+local StatusLabel
+
+local function makeGui()
+    local playerGui = LocalPlayer:WaitForChild("PlayerGui")
+
+    local old = playerGui:FindFirstChild("SmartAuraGui")
+    if old then
+        old:Destroy()
+    end
+
+    Gui = Instance.new("ScreenGui")
+    Gui.Name = "SmartAuraGui"
+    Gui.ResetOnSpawn = false
+    Gui.Parent = playerGui
+
+    local frame = Instance.new("Frame")
+    frame.Size = UDim2.fromOffset(290, 170)
+    frame.Position = UDim2.fromOffset(25, 280)
+    frame.BackgroundColor3 = Color3.fromRGB(15, 15, 18)
+    frame.BackgroundTransparency = 0.12
+    frame.BorderSizePixel = 0
+    frame.Active = true
+    frame.Draggable = true
+    frame.Parent = Gui
+
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 12)
+    corner.Parent = frame
+
+    local stroke = Instance.new("UIStroke")
+    stroke.Thickness = 1
+    stroke.Color = Color3.fromRGB(85, 85, 95)
+    stroke.Transparency = 0.25
+    stroke.Parent = frame
+
+    local title = Instance.new("TextLabel")
+    title.Size = UDim2.new(1, -16, 0, 26)
+    title.Position = UDim2.fromOffset(8, 6)
+    title.BackgroundTransparency = 1
+    title.Font = Enum.Font.GothamBold
+    title.TextSize = 14
+    title.TextXAlignment = Enum.TextXAlignment.Left
+    title.TextColor3 = Color3.fromRGB(255, 255, 255)
+    title.Text = "Smart Dungeon Aura V3"
+    title.Parent = frame
+
+    StatusLabel = Instance.new("TextLabel")
+    StatusLabel.Size = UDim2.new(1, -16, 0, 120)
+    StatusLabel.Position = UDim2.fromOffset(8, 34)
+    StatusLabel.BackgroundTransparency = 1
+    StatusLabel.Font = Enum.Font.Gotham
+    StatusLabel.TextSize = 12
+    StatusLabel.TextXAlignment = Enum.TextXAlignment.Left
+    StatusLabel.TextYAlignment = Enum.TextYAlignment.Top
+    StatusLabel.TextColor3 = Color3.fromRGB(210, 210, 215)
+    StatusLabel.Text = "Loading..."
+    StatusLabel.Parent = frame
+
+    local hint = Instance.new("TextLabel")
+    hint.Size = UDim2.new(1, -16, 0, 16)
+    hint.Position = UDim2.fromOffset(8, 152)
+    hint.BackgroundTransparency = 1
+    hint.Font = Enum.Font.GothamSemibold
+    hint.TextSize = 11
+    hint.TextXAlignment = Enum.TextXAlignment.Left
+    hint.TextColor3 = Color3.fromRGB(160, 160, 170)
+    hint.Text = "N = Toggle | RightControl = Hide"
+    hint.Parent = frame
+end
+
+local function updateGui()
+    if not StatusLabel then
+        return
+    end
+
+    StatusLabel.Text =
+        "Enabled: " .. tostring(ENABLED) ..
+        "\nRoom: " .. tostring(LastRoomName) ..
+        "\nTarget: " .. tostring(LastTargetName) ..
+        "\nDetected in range: " .. tostring(LastDetectedCount) ..
+        "\nAttacking: " .. tostring(LastAttackCount) .. "/" .. tostring(CurrentMobLimit) ..
+        "\nAttack range: " .. tostring(ATTACK_RANGE) ..
+        "\nTween: DungeonRooms order" ..
+        "\nDelay: " .. tostring(ATTACK_DELAY) ..
+        "\nStatus: " .. tostring(LastStatus)
+end
+
+makeGui()
+
+--//==================================================
+--// INPUT
+--//==================================================
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then
+        return
+    end
+
+    if input.KeyCode == TOGGLE_KEY then
+        ENABLED = not ENABLED
+        CurrentTarget = nil
+        LastStatus = ENABLED and "Enabled" or "Disabled"
+        warn("[SmartAura] Enabled:", ENABLED)
+    end
+
+    if input.KeyCode == GUI_TOGGLE_KEY then
+        if Gui then
+            Gui.Enabled = not Gui.Enabled
+        end
+    end
+end)
+
+--//==================================================
+--// RESPAWN
+--//==================================================
+LocalPlayer.CharacterAdded:Connect(function()
+    CurrentTarget = nil
+    CurrentRoomIndex = 1
+    LastTargetName = "None"
+    LastRoomName = "None"
+    LastStatus = "Respawned"
+end)
+
+--//==================================================
+--// MOVEMENT LOOP
+--//==================================================
+RunService.PreSimulation:Connect(function(dt)
+    updateGui()
+
+    if not ENABLED then
+        return
+    end
+
+    if not isPlayerAlive() then
+        CurrentTarget = nil
+        return
+    end
+
+    applyNoClip()
+    applyAntiSit()
+
+    local now = tick()
+
+    if now - LastTargetRefresh >= TargetRefreshRate then
+        LastTargetRefresh = now
+        pcall(refreshTarget)
+    end
+
+    if CurrentTarget and isValidMob(CurrentTarget) then
+        pcall(function()
+            flyAboveMob(dt, CurrentTarget)
+        end)
+    end
+
+    recoverMobLimit()
+end)
+
+--//==================================================
+--// ATTACK WORKERS
+--//==================================================
+local function getCurrentAttackDelay()
+    local mobs = getClosestAttackMobs()
+
+    if #mobs == 1 then
+        return SOLO_ATTACK_DELAY
+    end
+
+    return ATTACK_DELAY
+end
+
+local function startAttackWorker(workerName, startDelay)
+    task.spawn(function()
+        task.wait(startDelay)
+
+        while task.wait(0.05) do
+            if ENABLED then
+                local mobs = getClosestAttackMobs()
+
+                if #mobs > 0 then
+                    attackMobs(workerName)
+                    task.wait(getCurrentAttackDelay())
+                else
+                    LastAttackCount = 0
+                    task.wait(0.5)
+                end
+            else
+                task.wait(0.5)
+            end
+        end
+    end)
+end
+
+startAttackWorker("Loop1", 0)
+
+if OVERLAP_ATTACK_LOOPS then
+    startAttackWorker("Loop2", ATTACK_DELAY / 2)
+end
