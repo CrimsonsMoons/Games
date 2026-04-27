@@ -1,0 +1,206 @@
+-- Auto Execute GUI for Android Executors
+-- Simple and lightweight GUI
+
+local ScreenGui = Instance.new("ScreenGui")
+local MainFrame = Instance.new("Frame")
+local Title = Instance.new("TextLabel")
+local CloseBtn = Instance.new("TextButton")
+local SpeedToggle = Instance.new("TextButton")
+local JumpToggle = Instance.new("TextButton")
+local FarmToggle = Instance.new("TextButton")
+local CollectToggle = Instance.new("TextButton")
+local AFKToggle = Instance.new("TextButton")
+
+-- Settings
+local Settings = {
+    Speed = false,
+    Jump = false,
+    Farm = false,
+    Collect = false,
+    AFK = false
+}
+
+-- Parent to CoreGui
+ScreenGui.Name = "AutoExecGUI"
+ScreenGui.Parent = game:GetService("CoreGui")
+ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+
+-- Main Frame
+MainFrame.Name = "MainFrame"
+MainFrame.Parent = ScreenGui
+MainFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
+MainFrame.BorderSizePixel = 0
+MainFrame.Position = UDim2.new(0.5, -150, 0.5, -120)
+MainFrame.Size = UDim2.new(0, 300, 0, 240)
+MainFrame.Active = true
+MainFrame.Draggable = true
+
+local Corner = Instance.new("UICorner")
+Corner.CornerRadius = UDim.new(0, 10)
+Corner.Parent = MainFrame
+
+-- Title
+Title.Name = "Title"
+Title.Parent = MainFrame
+Title.BackgroundTransparency = 1
+Title.Size = UDim2.new(1, 0, 0, 40)
+Title.Font = Enum.Font.GothamBold
+Title.Text = "Auto Execute GUI"
+Title.TextColor3 = Color3.fromRGB(255, 255, 255)
+Title.TextSize = 18
+
+-- Close Button
+CloseBtn.Name = "CloseBtn"
+CloseBtn.Parent = MainFrame
+CloseBtn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+CloseBtn.Position = UDim2.new(1, -35, 0, 5)
+CloseBtn.Size = UDim2.new(0, 30, 0, 30)
+CloseBtn.Font = Enum.Font.GothamBold
+CloseBtn.Text = "X"
+CloseBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+CloseBtn.TextSize = 16
+
+local CloseBtnCorner = Instance.new("UICorner")
+CloseBtnCorner.CornerRadius = UDim.new(0, 6)
+CloseBtnCorner.Parent = CloseBtn
+
+-- Button Creator Function
+local function createButton(name, text, position)
+    local btn = name
+    btn.Parent = MainFrame
+    btn.BackgroundColor3 = Color3.fromRGB(45, 45, 60)
+    btn.Position = position
+    btn.Size = UDim2.new(0, 260, 0, 30)
+    btn.Font = Enum.Font.Gotham
+    btn.Text = "[ OFF ] " .. text
+    btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    btn.TextSize = 14
+    
+    local btnCorner = Instance.new("UICorner")
+    btnCorner.CornerRadius = UDim.new(0, 6)
+    btnCorner.Parent = btn
+    
+    return btn
+end
+
+-- Create Buttons
+createButton(SpeedToggle, "Speed Boost", UDim2.new(0, 20, 0, 50))
+createButton(JumpToggle, "Jump Power", UDim2.new(0, 20, 0, 90))
+createButton(FarmToggle, "Auto Farm", UDim2.new(0, 20, 0, 130))
+createButton(CollectToggle, "Auto Collect", UDim2.new(0, 20, 0, 170))
+createButton(AFKToggle, "Anti AFK", UDim2.new(0, 20, 0, 210))
+
+-- Toggle Function
+local function toggleButton(button, setting)
+    Settings[setting] = not Settings[setting]
+    if Settings[setting] then
+        button.BackgroundColor3 = Color3.fromRGB(50, 200, 50)
+        button.Text = button.Text:gsub("OFF", "ON")
+    else
+        button.BackgroundColor3 = Color3.fromRGB(45, 45, 60)
+        button.Text = button.Text:gsub("ON", "OFF")
+    end
+end
+
+-- Button Clicks
+SpeedToggle.MouseButton1Click:Connect(function()
+    toggleButton(SpeedToggle, "Speed")
+end)
+
+JumpToggle.MouseButton1Click:Connect(function()
+    toggleButton(JumpToggle, "Jump")
+end)
+
+FarmToggle.MouseButton1Click:Connect(function()
+    toggleButton(FarmToggle, "Farm")
+end)
+
+CollectToggle.MouseButton1Click:Connect(function()
+    toggleButton(CollectToggle, "Collect")
+end)
+
+AFKToggle.MouseButton1Click:Connect(function()
+    toggleButton(AFKToggle, "AFK")
+end)
+
+CloseBtn.MouseButton1Click:Connect(function()
+    ScreenGui:Destroy()
+end)
+
+-- Speed Boost Loop
+spawn(function()
+    while wait(0.1) do
+        if Settings.Speed then
+            local humanoid = game.Players.LocalPlayer.Character and game.Players.LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+            if humanoid then humanoid.WalkSpeed = 50 end
+        end
+    end
+end)
+
+-- Jump Power Loop
+spawn(function()
+    while wait(0.1) do
+        if Settings.Jump then
+            local humanoid = game.Players.LocalPlayer.Character and game.Players.LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+            if humanoid then humanoid.JumpPower = 100 end
+        end
+    end
+end)
+
+-- Auto Farm Loop
+spawn(function()
+    while wait(1) do
+        if Settings.Farm then
+            pcall(function()
+                local root = game.Players.LocalPlayer.Character and game.Players.LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+                if not root then return end
+                
+                for _, npc in pairs(workspace:GetDescendants()) do
+                    if npc:IsA("Model") and npc:FindFirstChild("Humanoid") and npc:FindFirstChild("HumanoidRootPart") then
+                        local npcHumanoid = npc.Humanoid
+                        if npcHumanoid.Health > 0 and (npc.HumanoidRootPart.Position - root.Position).Magnitude < 100 then
+                            root.CFrame = npc.HumanoidRootPart.CFrame * CFrame.new(0, 0, 5)
+                            wait(0.3)
+                            mouse1click()
+                            break
+                        end
+                    end
+                end
+            end)
+        end
+    end
+end)
+
+-- Auto Collect Loop
+spawn(function()
+    while wait(0.5) do
+        if Settings.Collect then
+            pcall(function()
+                local root = game.Players.LocalPlayer.Character and game.Players.LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+                if not root then return end
+                
+                for _, item in pairs(workspace:GetDescendants()) do
+                    if item:IsA("BasePart") and (item.Name:lower():find("coin") or item.Name:lower():find("gem")) then
+                        if (item.Position - root.Position).Magnitude < 50 then
+                            item.CFrame = root.CFrame
+                        end
+                    end
+                end
+            end)
+        end
+    end
+end)
+
+-- Anti AFK
+if game.Players.LocalPlayer then
+    local vu = game:GetService("VirtualUser")
+    game.Players.LocalPlayer.Idled:Connect(function()
+        if Settings.AFK then
+            vu:Button2Down(Vector2.new(0,0), workspace.CurrentCamera.CFrame)
+            wait(1)
+            vu:Button2Up(Vector2.new(0,0), workspace.CurrentCamera.CFrame)
+        end
+    end)
+end
+
+print("GUI Loaded!")
