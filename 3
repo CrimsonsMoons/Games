@@ -1,0 +1,94 @@
+--//==================================================
+--// CHEST ITEM AUTO GETMODEL
+--//==================================================
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local LocalPlayer = Players.LocalPlayer
+local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
+
+local GetModelRemote = ReplicatedStorage
+    :WaitForChild("Systems", 9e9)
+    :WaitForChild("ModelProvider", 9e9)
+    :WaitForChild("GetModel", 9e9)
+
+local ClaimedItems = {}
+
+local function invokeItemModel(itemName)
+    if not itemName or itemName == "" then
+        return
+    end
+
+    if ClaimedItems[itemName] then
+        return
+    end
+
+    ClaimedItems[itemName] = true
+
+    task.spawn(function()
+        local success, result = pcall(function()
+            return GetModelRemote:InvokeServer(itemName)
+        end)
+
+        if success then
+            warn("[ChestAutoGetModel] Invoked:", itemName, result)
+        else
+            warn("[ChestAutoGetModel] Failed:", itemName, result)
+            ClaimedItems[itemName] = nil
+        end
+    end)
+end
+
+local function processItemFrame(itemFrame)
+    if not itemFrame then
+        return
+    end
+
+    for _, child in ipairs(itemFrame:GetChildren()) do
+        invokeItemModel(child.Name)
+    end
+end
+
+local function hookItemFrame(itemFrame)
+    if not itemFrame then
+        return
+    end
+
+    processItemFrame(itemFrame)
+
+    itemFrame.ChildAdded:Connect(function(child)
+        task.wait(0.05)
+        invokeItemModel(child.Name)
+    end)
+end
+
+local function findAndHookChest()
+    local chestOpen = PlayerGui:FindFirstChild("ChestOpen")
+    if not chestOpen then
+        return
+    end
+
+    local overlay = chestOpen:FindFirstChild("Overlay")
+    if not overlay then
+        return
+    end
+
+    local itemFrame = overlay:FindFirstChild("ItemFrame")
+    if not itemFrame then
+        return
+    end
+
+    hookItemFrame(itemFrame)
+end
+
+-- initial check
+findAndHookChest()
+
+-- if ChestOpen gets added later
+PlayerGui.ChildAdded:Connect(function(child)
+    if child.Name == "ChestOpen" then
+        task.wait(0.25)
+        findAndHookChest()
+    end
+end)
