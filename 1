@@ -1,75 +1,31 @@
 --//==================================================
---// ENHANCED MOB AURA SYSTEM v2.0
---// Features:
---//   - Optimized performance with caching
---//   - Better mob validation and filtering
---//   - Configurable targeting priorities
---//   - Improved circular dodge pattern
---//   - Debug visualization (optional)
---//   - Health-based target switching
+--// FIXED MOB AURA + ANY-RANGE TWEEN + 100 RANGE ATTACK
+--// 2 OVERLAPPING ATTACK LOOPS INSIDE ONE SCRIPT
 --//==================================================
 
---//==================================================
---// CONFIGURATION
---//==================================================
+--// Settings
+local ENABLED = true
 
-local Config = {
-    -- Core Toggle
-    Enabled = true,
-    ToggleKey = Enum.KeyCode.N,
-    
-    -- Movement
-    Movement = {
-        Speed = 165,
-        HeightAbove = 35,
-        ArriveDistance = 2,
-        SmoothingFactor = 0.85, -- Smoother movement (0-1)
-    },
-    
-    -- Dodge System
-    Dodge = {
-        Enabled = true,
-        Radius = 10,
-        Speed = 3,
-        Pattern = "circle", -- "circle", "figure8", "random"
-    },
-    
-    -- Combat
-    Combat = {
-        MobsPerAttack = 3,
-        AttackDelay = 0.35,
-        SoloAttackDelay = 0.31,
-        AttackRange = 100,
-        TweenRange = math.huge,
-        RetargetHealthThreshold = 0.2, -- Switch target if current drops below 20% HP
-    },
-    
-    -- Targeting Priority (ordered by importance)
-    Targeting = {
-        PrioritizeLowest = true, -- Target lowest health first
-        HealthWeight = 0.7, -- How much to weight health vs distance
-        DistanceWeight = 0.3,
-    },
-    
-    -- Safety
-    Safety = {
-        NoClip = true,
-        AntiSit = true,
-        MinPlayerHealth = 0.15, -- Disable if player health below 15%
-    },
-    
-    -- Debug
-    Debug = {
-        Enabled = false,
-        ShowTargetBeam = false,
-        PrintStatus = false,
-    }
-}
+local MOVE_SPEED = 165
+local ABOVE_HEIGHT = 35
+local ARRIVE_DISTANCE = 2
 
---//==================================================
---// SERVICES
---//==================================================
+local DODGE_ENABLED = true
+local DODGE_RADIUS = 10
+local DODGE_SPEED = 3
 
+local MOBS_PER_ATTACK = 3
+local ATTACK_DELAY = 0.35
+local SOLO_ATTACK_DELAY = 0.31
+local ATTACK_RANGE = 100
+local TWEEN_RANGE = math.huge
+
+local NOCLIP = true
+local ANTI_SIT = true
+
+local TOGGLE_KEY = Enum.KeyCode.N
+
+--// Services
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
@@ -78,70 +34,33 @@ local Workspace = game:GetService("Workspace")
 
 local LocalPlayer = Players.LocalPlayer
 
---//==================================================
---// REMOTES & REFERENCES
---//==================================================
-
+--// Remote
 local PlayerAttack = ReplicatedStorage
     :WaitForChild("Systems", 9e9)
     :WaitForChild("Combat", 9e9)
     :WaitForChild("PlayerAttack", 9e9)
 
+--// Folder
 local MobsFolder = Workspace:WaitForChild("Mobs", 9e9)
 
---//==================================================
---// STATE
---//==================================================
+--// State
+local CurrentTarget = nil
+local DodgeAngle = 0
+local LastFireTimes = {}
 
-local State = {
-    CurrentTarget = nil,
-    DodgeAngle = 0,
-    LastAttackTime = 0,
-    LastValidationTime = 0,
-    CachedMobs = {},
-    TargetLockTime = 0,
-}
-
---//==================================================
---// UTILITY FUNCTIONS
---//==================================================
-
-local Util = {}
-
-function Util.Lerp(a, b, t)
-    return a + (b - a) * t
-end
-
-function Util.Clamp(value, min, max)
-    return math.max(min, math.min(max, value))
-end
-
-function Util.GetRandomOffset(radius)
-    local angle = math.random() * math.pi * 2
-    return Vector3.new(
-        math.cos(angle) * radius,
-        0,
-        math.sin(angle) * radius
-    )
-end
-
---//==================================================
---// PLAYER FUNCTIONS
---//==================================================
-
-local Player = {}
-
-function Player.GetCharacter()
+--// Player helpers
+local function getCharacter()
     return LocalPlayer.Character
 end
 
-function Player.GetHumanoid()
-    local character = Player.GetCharacter()
+local function getHumanoid()
+    local character = getCharacter()
     return character and character:FindFirstChildWhichIsA("Humanoid")
 end
 
-function Player.GetRoot()
-    local character = Player.GetCharacter()
+local function getRoot()
+    local character = getCharacter()
+
     if not character or not character.Parent then
         return nil
     end
@@ -151,30 +70,13 @@ function Player.GetRoot()
         or character.PrimaryPart
 end
 
-function Player.IsAlive()
-    local humanoid = Player.GetHumanoid()
-    if not humanoid or humanoid.Health <= 0 then
-        return false
-    end
-    
-    -- Safety check: disable if player health too low
-    local healthPercent = humanoid.Health / humanoid.MaxHealth
-    return healthPercent >= Config.Safety.MinPlayerHealth
+local function isPlayerAlive()
+    local humanoid = getHumanoid()
+    return humanoid and humanoid.Health > 0
 end
 
-function Player.GetHealthPercent()
-    local humanoid = Player.GetHumanoid()
-    if not humanoid then return 0 end
-    return humanoid.Health / humanoid.MaxHealth
-end
-
---//==================================================
---// MOB FUNCTIONS
---//==================================================
-
-local Mob = {}
-
-function Mob.GetRoot(mob)
+--// Mob helpers
+local function getMobRoot(mob)
     if not mob or not mob.Parent then
         return nil
     end
@@ -184,113 +86,98 @@ function Mob.GetRoot(mob)
         or mob:FindFirstChild("Torso")
         or mob:FindFirstChild("UpperTorso")
         or mob.PrimaryPart
-        or mob:FindFirstChildWhichIsA("BasePart")
+        or mob:FindFirstChildWhichIsA("BasePart", true)
 end
 
-function Mob.GetHealth(mob)
+local function getMobHealth(mob)
     if not mob or not mob.Parent then
         return nil
     end
 
-    -- Try Humanoid first
-    local humanoid = mob:FindFirstChildWhichIsA("Humanoid")
+    local humanoid = mob:FindFirstChildWhichIsA("Humanoid", true)
+
     if humanoid then
-        return humanoid.Health, humanoid.MaxHealth
+        return humanoid.Health
     end
 
-    -- Try attributes
-    local healthAttrs = {
-        "Health", "health", "HP", "hp",
-        "NewHealth", "CurrentHealth", "currentHealth"
-    }
-    
-    local maxHealthAttrs = {
-        "MaxHealth", "maxHealth", "MaxHP", "maxHP"
+    local attrs = {
+        "Health",
+        "health",
+        "HP",
+        "hp",
+        "NewHealth",
+        "CurrentHealth",
+        "currentHealth"
     }
 
-    local health = nil
-    for _, attr in ipairs(healthAttrs) do
+    for _, attr in ipairs(attrs) do
         local value = mob:GetAttribute(attr)
+
         if typeof(value) == "number" then
-            health = value
-            break
-        end
-    end
-    
-    local maxHealth = nil
-    for _, attr in ipairs(maxHealthAttrs) do
-        local value = mob:GetAttribute(attr)
-        if typeof(value) == "number" then
-            maxHealth = value
-            break
+            return value
         end
     end
 
-    return health, maxHealth or 100
+    return nil
 end
 
-function Mob.GetHealthPercent(mob)
-    local health, maxHealth = Mob.GetHealth(mob)
-    if not health or not maxHealth or maxHealth == 0 then
-        return 1
-    end
-    return health / maxHealth
-end
-
-function Mob.IsOwnedByPlayer(mob)
+local function isOwnedByPlayer(mob)
     if not mob or not mob.Parent then
         return true
     end
 
-    local ownerAttrs = {
-        "Owner", "owner", "OwnerId", "ownerId",
-        "UserId", "userId", "Summoner", "summoner"
-    }
-    
-    for _, attr in ipairs(ownerAttrs) do
-        local owner = mob:GetAttribute(attr)
-        
-        if owner == nil or owner == "" or owner == 0 then
-            continue
+    local owner =
+        mob:GetAttribute("Owner")
+        or mob:GetAttribute("owner")
+        or mob:GetAttribute("OwnerId")
+        or mob:GetAttribute("ownerId")
+        or mob:GetAttribute("UserId")
+        or mob:GetAttribute("userId")
+        or mob:GetAttribute("Summoner")
+        or mob:GetAttribute("summoner")
+
+    if owner == nil or owner == "" or owner == 0 then
+        return false
+    end
+
+    if typeof(owner) == "Instance" then
+        if owner:IsA("Player") then
+            return true
         end
 
-        if typeof(owner) == "Instance" then
-            if owner:IsA("Player") then
-                return true
-            end
-            if owner:IsA("Model") and Players:GetPlayerFromCharacter(owner) then
-                return true
-            end
-        end
-
-        if typeof(owner) == "number" then
-            return Players:GetPlayerByUserId(owner) ~= nil
-        end
-
-        if typeof(owner) == "string" then
-            local lowerOwner = string.lower(owner)
-            for _, player in ipairs(Players:GetPlayers()) do
-                if lowerOwner == string.lower(player.Name)
-                    or lowerOwner == string.lower(player.DisplayName)
-                    or lowerOwner == tostring(player.UserId)
-                then
-                    return true
-                end
-            end
-        end
-
-        if owner == true then
+        if owner:IsA("Model") and Players:GetPlayerFromCharacter(owner) then
             return true
         end
     end
 
-    return false
+    if typeof(owner) == "number" then
+        return Players:GetPlayerByUserId(owner) ~= nil
+    end
+
+    if typeof(owner) == "string" then
+        local lowerOwner = string.lower(owner)
+
+        for _, player in ipairs(Players:GetPlayers()) do
+            if lowerOwner == string.lower(player.Name)
+                or lowerOwner == string.lower(player.DisplayName)
+                or lowerOwner == tostring(player.UserId)
+            then
+                return true
+            end
+        end
+    end
+
+    return owner == true
 end
 
-function Mob.IsDeadByAttribute(mob)
+local function isDeadByAttribute(mob)
     local deadAttrs = {
-        "Dead", "dead", "Killed", "killed",
-        "IsDead", "isDead", "Defeated", "defeated"
+        "Dead",
+        "dead",
+        "Killed",
+        "killed",
+        "IsDead",
+        "isDead"
     }
 
     for _, attr in ipairs(deadAttrs) do
@@ -302,7 +189,7 @@ function Mob.IsDeadByAttribute(mob)
     return false
 end
 
-function Mob.IsValid(mob)
+local function isValidMob(mob)
     if not mob or not mob.Parent then
         return false
     end
@@ -311,233 +198,123 @@ function Mob.IsValid(mob)
         return false
     end
 
-    if Mob.IsOwnedByPlayer(mob) then
+    if isOwnedByPlayer(mob) then
         return false
     end
 
-    if Mob.IsDeadByAttribute(mob) then
+    if isDeadByAttribute(mob) then
         return false
     end
 
-    local health = Mob.GetHealth(mob)
+    local health = getMobHealth(mob)
+
     if typeof(health) == "number" and health <= 0 then
         return false
     end
 
-    if not Mob.GetRoot(mob) then
+    if not getMobRoot(mob) then
         return false
     end
 
     return true
 end
 
---//==================================================
---// TARGETING SYSTEM
---//==================================================
+--// Finds mob models directly and nested inside workspace.Mobs
+local function getMobCandidates()
+    local candidates = {}
+    local used = {}
 
-local Targeting = {}
-
-function Targeting.GetScore(mobData)
-    -- Lower score = higher priority
-    local distanceScore = mobData.Distance / Config.Combat.TweenRange
-    local healthScore = mobData.HealthPercent
-    
-    if Config.Targeting.PrioritizeLowest then
-        healthScore = 1 - healthScore
+    for _, obj in ipairs(MobsFolder:GetChildren()) do
+        if obj:IsA("Model") and not used[obj] then
+            used[obj] = true
+            candidates[#candidates + 1] = obj
+        end
     end
-    
-    return (distanceScore * Config.Targeting.DistanceWeight) +
-           (healthScore * Config.Targeting.HealthWeight)
+
+    for _, obj in ipairs(MobsFolder:GetDescendants()) do
+        if obj:IsA("Model") and not used[obj] then
+            used[obj] = true
+            candidates[#candidates + 1] = obj
+        end
+    end
+
+    return candidates
 end
 
-function Targeting.GetAllValidMobs(range)
-    local root = Player.GetRoot()
+local function getAllValidMobs(range)
+    local root = getRoot()
+
     if not root then
         return {}
     end
 
     local found = {}
-    local currentTime = tick()
 
-    for _, mob in ipairs(MobsFolder:GetChildren()) do
-        if Mob.IsValid(mob) then
-            local mobRoot = Mob.GetRoot(mob)
+    for _, mob in ipairs(getMobCandidates()) do
+        if isValidMob(mob) then
+            local mobRoot = getMobRoot(mob)
 
             if mobRoot and mobRoot.Parent then
                 local distance = (mobRoot.Position - root.Position).Magnitude
 
                 if distance <= range then
-                    local health, maxHealth = Mob.GetHealth(mob)
-                    local healthPercent = Mob.GetHealthPercent(mob)
-                    
-                    local mobData = {
+                    found[#found + 1] = {
                         Mob = mob,
                         Root = mobRoot,
                         Distance = distance,
-                        Health = health or math.huge,
-                        MaxHealth = maxHealth or 100,
-                        HealthPercent = healthPercent,
+                        Health = getMobHealth(mob) or math.huge
                     }
-                    
-                    mobData.Score = Targeting.GetScore(mobData)
-                    found[#found + 1] = mobData
                 end
             end
         end
     end
 
-    -- Sort by score (lower = better)
     table.sort(found, function(a, b)
-        return a.Score < b.Score
-    end)
+        if math.abs(a.Distance - b.Distance) <= 4 then
+            return a.Health < b.Health
+        end
 
-    State.CachedMobs = found
-    State.LastValidationTime = currentTime
+        return a.Distance < b.Distance
+    end)
 
     return found
 end
 
-function Targeting.GetAttackMobs()
-    local sorted = Targeting.GetAllValidMobs(Config.Combat.AttackRange)
+--// Attack mobs: closest 3 within 100 studs
+local function getClosestAttackMobs()
+    local sorted = getAllValidMobs(ATTACK_RANGE)
     local mobs = {}
 
-    for i = 1, math.min(Config.Combat.MobsPerAttack, #sorted) do
-        if Mob.IsValid(sorted[i].Mob) then
-            mobs[#mobs + 1] = sorted[i].Mob
+    for i = 1, math.min(MOBS_PER_ATTACK, #sorted) do
+        local mob = sorted[i].Mob
+
+        if isValidMob(mob) then
+            mobs[#mobs + 1] = mob
         end
     end
 
     return mobs, sorted
 end
 
-function Targeting.GetNearestMob()
-    local sorted = Targeting.GetAllValidMobs(Config.Combat.TweenRange)
+--// Tween target: nearest mob anywhere on map
+local function getNearestTweenMob()
+    local sorted = getAllValidMobs(TWEEN_RANGE)
 
-    if sorted[1] and Mob.IsValid(sorted[1].Mob) then
-        return sorted[1].Mob, sorted[1]
+    if sorted[1] and isValidMob(sorted[1].Mob) then
+        return sorted[1].Mob
     end
 
-    return nil, nil
+    return nil
 end
 
-function Targeting.ShouldRetarget(currentTarget)
-    if not currentTarget or not Mob.IsValid(currentTarget) then
-        return true
-    end
-    
-    -- Check if current target health is too low
-    local healthPercent = Mob.GetHealthPercent(currentTarget)
-    if healthPercent < Config.Combat.RetargetHealthThreshold then
-        return true
-    end
-    
-    -- Check if a significantly better target exists
-    local nearest, nearestData = Targeting.GetNearestMob()
-    if nearest and nearest ~= currentTarget then
-        local currentRoot = Mob.GetRoot(currentTarget)
-        local playerRoot = Player.GetRoot()
-        
-        if currentRoot and playerRoot then
-            local currentDist = (currentRoot.Position - playerRoot.Position).Magnitude
-            local nearestDist = nearestData.Distance
-            
-            -- Switch if new target is 30% closer and has more health
-            if nearestDist < currentDist * 0.7 and 
-               nearestData.HealthPercent > healthPercent then
-                return true
-            end
-        end
-    end
-    
-    return false
-end
-
---//==================================================
---// MOVEMENT SYSTEM
---//==================================================
-
-local Movement = {}
-
-function Movement.GetDodgeOffset(dt)
-    State.DodgeAngle += dt * Config.Dodge.Speed
-    
-    if not Config.Dodge.Enabled then
-        return Vector3.zero
-    end
-    
-    local pattern = Config.Dodge.Pattern
-    
-    if pattern == "circle" then
-        return Vector3.new(
-            math.cos(State.DodgeAngle) * Config.Dodge.Radius,
-            0,
-            math.sin(State.DodgeAngle) * Config.Dodge.Radius
-        )
-    elseif pattern == "figure8" then
-        return Vector3.new(
-            math.sin(State.DodgeAngle) * Config.Dodge.Radius,
-            0,
-            math.sin(State.DodgeAngle * 2) * Config.Dodge.Radius * 0.5
-        )
-    elseif pattern == "random" then
-        if tick() - State.TargetLockTime > 2 then
-            State.TargetLockTime = tick()
-            return Util.GetRandomOffset(Config.Dodge.Radius)
-        end
-    end
-    
-    return Vector3.zero
-end
-
-function Movement.FlyAboveMob(dt, mob)
-    if not Config.Enabled or not Player.IsAlive() or not Mob.IsValid(mob) then
+--// NoClip
+local function applyNoClip()
+    if not NOCLIP then
         return
     end
 
-    local root = Player.GetRoot()
-    local mobRoot = Mob.GetRoot(mob)
+    local character = getCharacter()
 
-    if not root or not mobRoot then
-        return
-    end
-
-    local dodgeOffset = Movement.GetDodgeOffset(dt)
-    
-    local targetPosition = mobRoot.Position +
-        Vector3.new(0, Config.Movement.HeightAbove, 0) +
-        dodgeOffset
-
-    local currentPosition = root.Position
-    local offset = targetPosition - currentPosition
-    local distance = offset.Magnitude
-
-    -- Zero out velocities for stable CFrame movement
-    root.AssemblyLinearVelocity = Vector3.zero
-    root.AssemblyAngularVelocity = Vector3.zero
-
-    local newPosition
-    
-    if distance <= Config.Movement.ArriveDistance then
-        newPosition = targetPosition
-    else
-        local direction = offset.Unit
-        local moveAmount = math.min(Config.Movement.Speed * dt, distance)
-        
-        -- Apply smoothing
-        local smoothed = Util.Lerp(0, moveAmount, Config.Movement.SmoothingFactor)
-        newPosition = currentPosition + direction * smoothed
-    end
-
-    -- Look at mob while moving
-    root.CFrame = CFrame.lookAt(newPosition, mobRoot.Position)
-end
-
-function Movement.ApplyNoClip()
-    if not Config.Safety.NoClip then
-        return
-    end
-
-    local character = Player.GetCharacter()
     if not character then
         return
     end
@@ -549,164 +326,173 @@ function Movement.ApplyNoClip()
     end
 end
 
-function Movement.ApplyAntiSit()
-    if not Config.Safety.AntiSit then
+local function applyAntiSit()
+    if not ANTI_SIT then
         return
     end
 
-    local humanoid = Player.GetHumanoid()
+    local humanoid = getHumanoid()
+
     if humanoid then
         humanoid.Sit = false
         humanoid.PlatformStand = false
     end
 end
 
---//==================================================
---// COMBAT SYSTEM
---//==================================================
+--// CFrame fly above nearest mob from any radius
+local function flyAboveMob(dt, mob)
+    if not ENABLED then
+        return
+    end
 
-local Combat = {}
+    if not isPlayerAlive() or not isValidMob(mob) then
+        return
+    end
 
-function Combat.Attack()
-    if not Config.Enabled then
+    local root = getRoot()
+    local mobRoot = getMobRoot(mob)
+
+    if not root or not mobRoot then
+        return
+    end
+
+    DodgeAngle += dt * DODGE_SPEED
+
+    local dodgeOffset = Vector3.zero
+
+    if DODGE_ENABLED then
+        dodgeOffset = Vector3.new(
+            math.cos(DodgeAngle) * DODGE_RADIUS,
+            0,
+            math.sin(DodgeAngle) * DODGE_RADIUS
+        )
+    end
+
+    local targetPosition =
+        mobRoot.Position
+        + Vector3.new(0, ABOVE_HEIGHT, 0)
+        + dodgeOffset
+
+    local currentPosition = root.Position
+    local offset = targetPosition - currentPosition
+    local distance = offset.Magnitude
+
+    root.AssemblyLinearVelocity = Vector3.zero
+    root.AssemblyAngularVelocity = Vector3.zero
+
+    local newPosition
+
+    if distance <= ARRIVE_DISTANCE then
+        newPosition = targetPosition
+    else
+        local direction = offset.Unit
+        local moveAmount = math.min(MOVE_SPEED * dt, distance)
+        newPosition = currentPosition + direction * moveAmount
+    end
+
+    root.CFrame = CFrame.lookAt(newPosition, mobRoot.Position)
+end
+
+--// Attack closest mobs
+local function attackMobs(workerName)
+    if not ENABLED then
         return 0
     end
 
-    local mobs = Targeting.GetAttackMobs()
+    local mobs = getClosestAttackMobs()
 
     if #mobs <= 0 then
         return 0
     end
 
-    -- Final validation before attack
-    local validMobs = {}
+    local clean = {}
+
     for _, mob in ipairs(mobs) do
-        if Mob.IsValid(mob) then
-            validMobs[#validMobs + 1] = mob
+        if isValidMob(mob) then
+            clean[#clean + 1] = mob
         end
     end
 
-    if #validMobs <= 0 then
+    if #clean <= 0 then
         return 0
     end
 
-    local success, err = pcall(function()
-        PlayerAttack:FireServer(validMobs)
+    local success = pcall(function()
+        PlayerAttack:FireServer(clean)
     end)
-    
-    if not success and Config.Debug.Enabled then
-        warn("[MobAura] Attack failed:", err)
+
+    if success then
+        LastFireTimes[workerName] = tick()
+    else
+        warn("[MobAura] Attack failed from:", workerName)
     end
 
-    State.LastAttackTime = tick()
-    return #validMobs
+    return #clean
 end
 
---//==================================================
---// DEBUG SYSTEM
---//==================================================
-
-local Debug = {}
-
-function Debug.Print(...)
-    if Config.Debug.Enabled and Config.Debug.PrintStatus then
-        print("[MobAura]", ...)
-    end
-end
-
-function Debug.CreateTargetBeam(from, to)
-    if not Config.Debug.ShowTargetBeam then
-        return
-    end
-    
-    -- Implementation for visual debugging
-    -- (Add beam visualization here if needed)
-end
-
---//==================================================
---// INPUT HANDLING
---//==================================================
-
+--// Toggle
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
     if gameProcessed then
         return
     end
 
-    if input.KeyCode == Config.ToggleKey then
-        Config.Enabled = not Config.Enabled
-        State.CurrentTarget = nil
-        
-        warn(string.format(
-            "[MobAura] %s (Health: %.0f%%)",
-            Config.Enabled and "ENABLED" or "DISABLED",
-            Player.GetHealthPercent() * 100
-        ))
+    if input.KeyCode == TOGGLE_KEY then
+        ENABLED = not ENABLED
+        CurrentTarget = nil
+        warn("[MobAura] Enabled:", ENABLED)
     end
 end)
 
---//==================================================
---// MAIN LOOPS
---//==================================================
-
--- Movement Loop
+--// Movement loop
 RunService.PreSimulation:Connect(function(dt)
-    if not Config.Enabled or not Player.IsAlive() then
-        State.CurrentTarget = nil
+    if not ENABLED then
         return
     end
 
-    Movement.ApplyNoClip()
-    Movement.ApplyAntiSit()
-
-    -- Smart retargeting
-    if Targeting.ShouldRetarget(State.CurrentTarget) then
-        State.CurrentTarget = Targeting.GetNearestMob()
+    if not isPlayerAlive() then
+        CurrentTarget = nil
+        return
     end
 
-    if State.CurrentTarget and Mob.IsValid(State.CurrentTarget) then
-        Movement.FlyAboveMob(dt, State.CurrentTarget)
+    applyNoClip()
+    applyAntiSit()
+
+    if not isValidMob(CurrentTarget) then
+        CurrentTarget = getNearestTweenMob()
+    end
+
+    if CurrentTarget and isValidMob(CurrentTarget) then
+        flyAboveMob(dt, CurrentTarget)
     end
 end)
 
--- Attack Loop
-task.spawn(function()
-    while task.wait(0.05) do
-        if Config.Enabled and Player.IsAlive() then
-            local attackCount = Combat.Attack()
+--// Overlapping attack worker
+local function startAttackWorker(workerName, startDelay)
+    task.spawn(function()
+        task.wait(startDelay)
 
-            if attackCount > 0 then
-                local delay = attackCount == 1 
-                    and Config.Combat.SoloAttackDelay 
-                    or Config.Combat.AttackDelay
-                    
-                Debug.Print("Attacked", attackCount, "mobs")
-                task.wait(delay)
+        while task.wait(0.05) do
+            if ENABLED then
+                local mobs = getClosestAttackMobs()
+
+                if #mobs > 0 then
+                    attackMobs(workerName)
+
+                    if #mobs == 1 then
+                        task.wait(SOLO_ATTACK_DELAY)
+                    else
+                        task.wait(ATTACK_DELAY)
+                    end
+                else
+                    task.wait(0.5)
+                end
             else
                 task.wait(0.5)
             end
-        else
-            task.wait(0.5)
         end
-    end
-end)
+    end)
+end
 
---//==================================================
---// INITIALIZATION
---//==================================================
-
-warn(string.format([[
-[MobAura] Enhanced System Loaded
-  Toggle Key: %s
-  Movement Speed: %d
-  Attack Range: %d
-  Mobs Per Attack: %d
-  NoClip: %s
-  Debug: %s
-]], 
-    Config.ToggleKey.Name,
-    Config.Movement.Speed,
-    Config.Combat.AttackRange,
-    Config.Combat.MobsPerAttack,
-    Config.Safety.NoClip and "ON" or "OFF",
-    Config.Debug.Enabled and "ON" or "OFF"
-))
+--// Two overlapping .35 attack loops inside ONE script
+startAttackWorker("AttackLoop_1", 0)
+startAttackWorker("AttackLoop_2", ATTACK_DELAY / 2)
