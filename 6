@@ -1,0 +1,69 @@
+-- DIAGNOSTIC SCRIPT - Run this first to check your executor
+print("=== AUTOEXEC DIAGNOSTIC ===")
+
+-- Check if file functions exist
+print("writefile supported:", typeof(writefile) == "function")
+print("readfile supported:", typeof(readfile) == "function")
+print("isfile supported:", typeof(isfile) == "function")
+print("isfolder supported:", typeof(isfolder) == "function")
+print("listfiles supported:", typeof(listfiles) == "function")
+
+-- Try to find existing autoexec files
+if typeof(listfiles) == "function" then
+    print("\n=== Checking AutoExec Folders ===")
+    
+    local folders = {
+        "autoexec",
+        "AutoExec", 
+        "autoexecute",
+        "AutoExecute",
+        "Delta/AutoExecute",
+        "workspace/autoexec"
+    }
+    
+    for _, folder in ipairs(folders) do
+        pcall(function()
+            if isfolder(folder) then
+                print("Found folder:", folder)
+                local files = listfiles(folder)
+                print("  Files in " .. folder .. ":")
+                for _, file in ipairs(files) do
+                    print("    -", file)
+                end
+            end
+        end)
+    end
+end
+
+-- Try to create a test file in multiple locations
+print("\n=== Testing Write Locations ===")
+
+local testPaths = {
+    "autoexec/test.txt",
+    "AutoExec/test.txt",
+    "autoexecute/test.txt",
+    "AutoExecute/test.txt",
+    "Delta/AutoExecute/test.txt",
+    "workspace/autoexec/test.txt",
+    "test.txt"
+}
+
+for _, path in ipairs(testPaths) do
+    local success = pcall(function()
+        writefile(path, "test content")
+    end)
+    
+    if success then
+        print("✓ Successfully wrote to:", path)
+        
+        -- Check if file exists
+        if typeof(isfile) == "function" and isfile(path) then
+            print("  ✓ File confirmed to exist")
+        end
+    else
+        print("✗ Failed to write to:", path)
+    end
+end
+
+print("\n=== Diagnostic Complete ===")
+print("Look for the ✓ marks above to see which paths work!")
