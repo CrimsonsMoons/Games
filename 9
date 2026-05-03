@@ -1,0 +1,1580 @@
+--//==================================================
+--// SMART MOB AURA AUTO FARM + DIRECT CLAIM + GO AGAIN
+--// Auto reset:
+--// 1 player    = 9 resets
+--// 2-3 players = 7 resets
+--// 4-5 players = 5 resets
+--// 6+ players  = script stops
+--//
+--// AutoExecute / Queue Teleport:
+--// - Aliases queue_on_teleport as getgenv().queueteleport
+--// - Uses getgenv / writefile / readfile / cloneref
+--// - Waits until game:IsLoaded()
+--// - Waits 8 seconds after loading before running SmartAura_Main.lua
+--//
+--// IMPORTANT:
+--// Save this full script once as:
+--// SmartAura_Main.lua
+--//==================================================
+
+--// SERVICES
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local Workspace = game:GetService("Workspace")
+local HttpService = game:GetService("HttpService")
+
+local LocalPlayer = Players.LocalPlayer
+local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
+
+--// HARD SERVER SAFETY
+local MAX_SERVER_PLAYERS_TO_EXECUTE = 5
+
+if #Players:GetPlayers() > MAX_SERVER_PLAYERS_TO_EXECUTE then
+    warn("[SmartAura] Stopped. Server has more than 5 players:", #Players:GetPlayers())
+    return
+end
+
+--// REMOTES / FOLDERS
+local PlayerAttack = ReplicatedStorage
+    :WaitForChild("Systems", 9e9)
+    :WaitForChild("Combat", 9e9)
+    :WaitForChild("PlayerAttack", 9e9)
+
+local TriggerStartDungeon = ReplicatedStorage
+    :WaitForChild("Systems", 9e9)
+    :WaitForChild("Dungeons", 9e9)
+    :WaitForChild("TriggerStartDungeon", 9e9)
+
+local SetExitChoice = ReplicatedStorage
+    :WaitForChild("Systems", 9e9)
+    :WaitForChild("Dungeons", 9e9)
+    :WaitForChild("SetExitChoice", 9e9)
+
+local MobsFolder = Workspace:WaitForChild("Mobs", 9e9)
+
+--// CONFIG
+local SETTINGS_FILE = "SmartAura_Settings.json"
+
+local Config = {
+    Enabled = false,
+
+    MaxServerPlayers = 5,
+
+    StartDungeonDelay = 1,
+    AutoResetOnExecution = false,
+    ResetAmount = 5,
+    SmallServerResetAmount = 7,
+    AloneServerResetAmount = 9,
+
+    MoveSpeed = 185,
+    AboveHeight = 35,
+    ArriveDistance = 2,
+    TweenRange = math.huge,
+
+    DodgeEnabled = true,
+    DodgeRadius = 10,
+    DodgeSpeed = 3.25,
+
+    StartMobsPerAttack = 5,
+    MinMobsPerAttack = 2,
+    AttackRange = 100,
+    AttackDelay = 0.35,
+    SoloAttackDelay = 0.31,
+    OverlapAttackLoops = true,
+
+    TargetRefreshRate = 0.10,
+    MobCacheRefresh = 0.25,
+    RecoverAfterSeconds = 8,
+    FailsBeforeLowering = 2,
+
+    AutoClaim = true,
+    ClaimScanDelay = 0.20,
+    ClaimClickCooldown = 0.35,
+
+    AutoGoAgain = false,
+    AutoReExecuteOnTeleport = true,
+    SourceScriptFile = "SmartAura_Main.lua",
+    GoAgainDelay = 0.65,
+    GoAgainCooldown = 6,
+
+    NoClip = true,
+    AntiSit = true,
+    BlacklistPlayerOwned = true,
+
+    ToggleKey = Enum.KeyCode.N,
+    GuiToggleKey = Enum.KeyCode.RightControl,
+}
+
+--// STATE
+local CurrentTarget = nil
+local DodgeAngle = 0
+
+local CurrentMobLimit = Config.StartMobsPerAttack
+local FailCount = 0
+local LastGoodAttack = tick()
+local LastTargetRefresh = 0
+local LastMobCacheRefresh = 0
+
+local CachedMobCandidates = {}
+local LastDetectedCount = 0
+local LastAttackCount = 0
+local LastTargetName = "None"
+local LastStatus = "Loaded"
+local LastDistanceToTarget = math.huge
+
+local LastPosition = nil
+local StuckTimer = 0
+local ResetRunning = false
+local LastClaimClick = 0
+local LastGoAgainFire = 0
+
+local Gui
+local StatusLabel
+local AutoResetButton
+local AutoClaimButton
+local AutoGoAgainButton
+local AutoReExecuteButton
+
+--// SAVE / LOAD SETTINGS
+local function canSaveSettings()
+    return typeof(writefile) == "function"
+        and typeof(readfile) == "function"
+        and typeof(isfile) == "function"
+end
+
+local function saveSettings()
+    if not canSaveSettings() then
+        LastStatus = "Save unsupported"
+        warn("[SmartAura] Save unsupported")
+        return
+    end
+
+    local data = {
+        AutoResetOnExecution = Config.AutoResetOnExecution,
+        AutoClaim = Config.AutoClaim,
+        AutoGoAgain = Config.AutoGoAgain,
+        AutoReExecuteOnTeleport = Config.AutoReExecuteOnTeleport
+    }
+
+    local success, err = pcall(function()
+        writefile(SETTINGS_FILE, HttpService:JSONEncode(data))
+    end)
+
+    if success then
+        LastStatus = "Settings saved"
+    else
+        LastStatus = "Save failed"
+        warn("[SmartAura] Save failed:", err)
+    end
+end
+
+local function loadSettings()
+    if not canSaveSettings() or not isfile(SETTINGS_FILE) then
+        return
+    end
+
+    local success, data = pcall(function()
+        return HttpService:JSONDecode(readfile(SETTINGS_FILE))
+    end)
+
+    if success and typeof(data) == "table" then
+        if typeof(data.AutoResetOnExecution) == "boolean" then
+            Config.AutoResetOnExecution = data.AutoResetOnExecution
+        end
+
+        if typeof(data.AutoClaim) == "boolean" then
+            Config.AutoClaim = data.AutoClaim
+        end
+
+        if typeof(data.AutoGoAgain) == "boolean" then
+            Config.AutoGoAgain = data.AutoGoAgain
+        end
+
+        if typeof(data.AutoReExecuteOnTeleport) == "boolean" then
+            Config.AutoReExecuteOnTeleport = data.AutoReExecuteOnTeleport
+        end
+
+        LastStatus = "Settings loaded"
+    end
+end
+
+loadSettings()
+
+--// FORCE AUTO LOAD / AUTOEXEC ON FIRST RUN
+--// This makes Queue/AutoExec turn on automatically without needing the GUI button first.
+Config.AutoReExecuteOnTeleport = true
+
+pcall(function()
+    if canSaveSettings() then
+        writefile(SETTINGS_FILE, HttpService:JSONEncode({
+            AutoResetOnExecution = Config.AutoResetOnExecution,
+            AutoClaim = Config.AutoClaim,
+            AutoGoAgain = Config.AutoGoAgain,
+            AutoReExecuteOnTeleport = true
+        }))
+    end
+end)
+
+--// SERVER SAFETY
+local function isServerSafe()
+    return #Players:GetPlayers() <= Config.MaxServerPlayers
+end
+
+local function isAloneServer()
+    return #Players:GetPlayers() == 1
+end
+
+local function getStartupResetAmount()
+    local count = #Players:GetPlayers()
+
+    if count == 1 then
+        return Config.AloneServerResetAmount, "Alone server. Startup reset x" .. tostring(Config.AloneServerResetAmount)
+    end
+
+    if count == 2 or count == 3 then
+        return Config.SmallServerResetAmount, "Small server. Startup reset x" .. tostring(Config.SmallServerResetAmount)
+    end
+
+    return Config.ResetAmount, "Normal server. Startup reset x" .. tostring(Config.ResetAmount)
+end
+
+local function stopIfServerUnsafe()
+    if isServerSafe() then
+        return false
+    end
+
+    Config.Enabled = false
+    LastStatus = "Stopped: " .. tostring(#Players:GetPlayers()) .. " players"
+    warn("[SmartAura] Stopped because server has more than 5 players:", #Players:GetPlayers())
+    return true
+end
+
+Players.PlayerAdded:Connect(function()
+    task.wait(0.25)
+    stopIfServerUnsafe()
+end)
+
+--// AUTOEXECUTE / QUEUE TELEPORT LOADER INSTALLER
+local function safeMakeFolder(path)
+    if typeof(makefolder) ~= "function" then
+        return
+    end
+
+    pcall(function()
+        if typeof(isfolder) == "function" then
+            if not isfolder(path) then
+                makefolder(path)
+            end
+        else
+            makefolder(path)
+        end
+    end)
+end
+
+local function getExecutorQueue()
+    local env = typeof(getgenv) == "function" and getgenv() or _G
+
+    local queue =
+        rawget(env, "queue_on_teleport")
+        or rawget(env, "queueonteleport")
+        or queue_on_teleport
+        or queueonteleport
+        or (syn and syn.queue_on_teleport)
+        or (fluxus and fluxus.queue_on_teleport)
+
+    if typeof(queue) == "function" then
+        env.queueteleport = queue
+        return queue
+    end
+
+    env.queueteleport = function() end
+    return env.queueteleport
+end
+
+local function installAutoExecuteLoader()
+    if not Config.AutoReExecuteOnTeleport then
+        LastStatus = "Auto Re-Execute is OFF"
+        return false
+    end
+
+    if typeof(writefile) ~= "function" then
+        LastStatus = "writefile unsupported"
+        warn("[SmartAura] writefile unsupported")
+        return false
+    end
+
+    safeMakeFolder("Delta")
+    safeMakeFolder("Delta/AutoExecute")
+    safeMakeFolder("AutoExecute")
+    safeMakeFolder("autoexecute")
+    safeMakeFolder("autoexec")
+
+    local loader = [[
+local env = typeof(getgenv) == "function" and getgenv() or _G
+
+local function getRef(serviceName)
+    local service = game:GetService(serviceName)
+
+    if typeof(cloneref) == "function" then
+        local ok, ref = pcall(cloneref, service)
+        if ok and ref then
+            return ref
+        end
+    end
+
+    return service
+end
+
+repeat task.wait() until game:IsLoaded()
+
+local Players = getRef("Players")
+repeat task.wait() until Players.LocalPlayer
+
+task.wait(8)
+
+if #Players:GetPlayers() > 5 then
+    warn("[SmartAura Loader] Stopped. More than 5 players:", #Players:GetPlayers())
+    return
+end
+
+env.SmartAura_AutoLoaded = true
+
+if typeof(readfile) == "function" and typeof(isfile) == "function" and isfile("SmartAura_Main.lua") then
+    local source = readfile("SmartAura_Main.lua")
+    local fn, compileErr = loadstring(source)
+
+    if fn then
+        local ok, runErr = pcall(fn)
+        if not ok then
+            warn("[SmartAura Loader] Runtime error:", runErr)
+        end
+    else
+        warn("[SmartAura Loader] Compile error:", compileErr)
+    end
+else
+    warn("[SmartAura Loader] Missing SmartAura_Main.lua")
+end
+]]
+
+    local paths = {
+        "Delta/AutoExecute/SmartAura_Loader.lua",
+        "AutoExecute/SmartAura_Loader.lua",
+        "autoexecute/SmartAura_Loader.lua",
+        "autoexec/SmartAura_Loader.lua",
+        "SmartAura_Loader.lua"
+    }
+
+    local savedAny = false
+
+    for _, path in ipairs(paths) do
+        local ok = pcall(function()
+            writefile(path, loader)
+        end)
+
+        if ok then
+            savedAny = true
+            warn("[SmartAura] Installed AutoExecute loader at:", path)
+        end
+    end
+
+    local queue = getExecutorQueue()
+
+    local queueLoader = [[
+local env = typeof(getgenv) == "function" and getgenv() or _G
+
+local function getRef(serviceName)
+    local service = game:GetService(serviceName)
+
+    if typeof(cloneref) == "function" then
+        local ok, ref = pcall(cloneref, service)
+        if ok and ref then
+            return ref
+        end
+    end
+
+    return service
+end
+
+repeat task.wait() until game:IsLoaded()
+
+local Players = getRef("Players")
+repeat task.wait() until Players.LocalPlayer
+
+task.wait(8)
+
+if #Players:GetPlayers() > 5 then
+    warn("[SmartAura Queue] Stopped. More than 5 players:", #Players:GetPlayers())
+    return
+end
+
+env.SmartAura_AutoLoaded = true
+
+if typeof(readfile) == "function" and typeof(isfile) == "function" and isfile("SmartAura_Main.lua") then
+    local source = readfile("SmartAura_Main.lua")
+    local fn, compileErr = loadstring(source)
+
+    if fn then
+        local ok, runErr = pcall(fn)
+        if not ok then
+            warn("[SmartAura Queue] Runtime error:", runErr)
+        end
+    else
+        warn("[SmartAura Queue] Compile error:", compileErr)
+    end
+else
+    warn("[SmartAura Queue] Missing SmartAura_Main.lua")
+end
+]]
+
+    local queued = pcall(function()
+        queue(queueLoader)
+    end)
+
+    if savedAny or queued then
+        LastStatus = "Installed loader + queued teleport"
+        return true
+    else
+        LastStatus = "Failed loader + queue"
+        return false
+    end
+end
+
+local function fireGoAgain()
+    if not Config.AutoGoAgain then
+        return
+    end
+
+    if tick() - LastGoAgainFire < Config.GoAgainCooldown then
+        return
+    end
+
+    if stopIfServerUnsafe() then
+        return
+    end
+
+    LastGoAgainFire = tick()
+
+    local installed = installAutoExecuteLoader()
+
+    task.wait(0.25)
+
+    pcall(function()
+        SetExitChoice:FireServer("GoAgain")
+    end)
+
+    LastStatus = installed and "GoAgain + queue/loader ready" or "GoAgain fired but loader failed/off"
+    warn("[SmartAura] GoAgain fired | queue/loader ready:", installed)
+end
+
+task.spawn(function()
+    while task.wait(8) do
+        if Config.AutoReExecuteOnTeleport and isServerSafe() then
+            pcall(installAutoExecuteLoader)
+        end
+    end
+end)
+
+--// PLAYER HELPERS
+local function getCharacter()
+    return LocalPlayer.Character
+end
+
+local function getHumanoid()
+    local character = getCharacter()
+    return character and character:FindFirstChildWhichIsA("Humanoid")
+end
+
+local function getRoot()
+    local character = getCharacter()
+
+    if not character or not character.Parent then
+        return nil
+    end
+
+    return character:FindFirstChild("HumanoidRootPart")
+        or character:FindFirstChild("RootPart")
+        or character.PrimaryPart
+end
+
+local function isPlayerAlive()
+    local humanoid = getHumanoid()
+    return humanoid and humanoid.Health > 0
+end
+
+--// FARM CONTROL
+local function startAutoFarm()
+    if stopIfServerUnsafe() then
+        return
+    end
+
+    Config.Enabled = true
+    CurrentTarget = nil
+    LastStatus = "Auto farm started"
+end
+
+local function stopAutoFarm()
+    Config.Enabled = false
+    CurrentTarget = nil
+    LastStatus = "Auto farm stopped"
+end
+
+--// RESET LOGIC
+local function waitForCharacterRespawn(timeout)
+    local start = tick()
+    local oldChar = getCharacter()
+
+    repeat
+        task.wait(0.1)
+
+        local newChar = getCharacter()
+        local hum = getHumanoid()
+
+        if newChar and newChar ~= oldChar and hum and hum.Health > 0 then
+            return true
+        end
+    until tick() - start >= timeout
+
+    return false
+end
+
+local function resetCharacterOnce(index, total)
+    LastStatus = "Resetting avatar " .. tostring(index) .. "/" .. tostring(total)
+
+    local character = getCharacter()
+    local humanoid = getHumanoid()
+
+    if humanoid then
+        humanoid.Health = 0
+    elseif character then
+        character:BreakJoints()
+    end
+
+    waitForCharacterRespawn(7)
+    task.wait(1.15)
+end
+
+local function resetCharacterTimes(amount)
+    if ResetRunning then
+        return
+    end
+
+    if stopIfServerUnsafe() then
+        return
+    end
+
+    ResetRunning = true
+    Config.Enabled = false
+    CurrentTarget = nil
+
+    for i = 1, amount do
+        if stopIfServerUnsafe() then
+            break
+        end
+
+        resetCharacterOnce(i, amount)
+    end
+
+    ResetRunning = false
+    LastStatus = "Reset sequence finished"
+end
+
+--// EXACT CHEST CLAIM BUTTON
+local function getExactClaimButton()
+    local chestOpen = PlayerGui:FindFirstChild("ChestOpen")
+    if not chestOpen then
+        return nil
+    end
+
+    local overlay = chestOpen:FindFirstChild("Overlay")
+    if not overlay then
+        return nil
+    end
+
+    local actionButtons = overlay:FindFirstChild("ActionButtons")
+    if not actionButtons then
+        return nil
+    end
+
+    return actionButtons:FindFirstChild("Button")
+end
+
+local function isVisibleGuiObject(obj)
+    if not obj or not obj:IsA("GuiObject") then
+        return false
+    end
+
+    if not obj.Visible then
+        return false
+    end
+
+    if obj.AbsoluteSize.X <= 0 or obj.AbsoluteSize.Y <= 0 then
+        return false
+    end
+
+    local current = obj.Parent
+
+    while current and current ~= PlayerGui do
+        if current:IsA("GuiObject") and not current.Visible then
+            return false
+        end
+
+        current = current.Parent
+    end
+
+    return true
+end
+
+local function isExactClaimButtonReady(button)
+    if not button then
+        return false
+    end
+
+    if not button:IsA("TextButton") and not button:IsA("ImageButton") then
+        return false
+    end
+
+    if button.Name ~= "Button" then
+        return false
+    end
+
+    if not button.Active then
+        return false
+    end
+
+    if not isVisibleGuiObject(button) then
+        return false
+    end
+
+    return true
+end
+
+local function fireButtonSignal(button)
+    local fired = false
+
+    if typeof(firesignal) == "function" then
+        pcall(function()
+            firesignal(button.Activated)
+            fired = true
+        end)
+
+        pcall(function()
+            firesignal(button.MouseButton1Click)
+            fired = true
+        end)
+
+        pcall(function()
+            firesignal(button.MouseButton1Down)
+            task.wait(0.03)
+            firesignal(button.MouseButton1Up)
+            fired = true
+        end)
+    end
+
+    return fired
+end
+
+local function clickExactClaimButton()
+    if not Config.AutoClaim then
+        return
+    end
+
+    if stopIfServerUnsafe() then
+        return
+    end
+
+    if tick() - LastClaimClick < Config.ClaimClickCooldown then
+        return
+    end
+
+    local button = getExactClaimButton()
+
+    if not isExactClaimButtonReady(button) then
+        return
+    end
+
+    LastClaimClick = tick()
+
+    local fired = fireButtonSignal(button)
+
+    if fired then
+        LastStatus = "Direct-fired chest claim"
+        warn("[AutoClaim] Direct-fired:", button:GetFullName(), "Active:", button.Active)
+
+        task.delay(Config.GoAgainDelay, function()
+            fireGoAgain()
+        end)
+    else
+        LastStatus = "firesignal unsupported"
+        warn("[AutoClaim] firesignal unsupported")
+    end
+end
+
+task.spawn(function()
+    while task.wait(Config.ClaimScanDelay) do
+        pcall(clickExactClaimButton)
+    end
+end)
+
+PlayerGui.DescendantAdded:Connect(function(obj)
+    task.wait(0.1)
+
+    if obj.Name == "Button" then
+        pcall(clickExactClaimButton)
+    end
+end)
+
+--// MOB HELPERS
+local function getMobRoot(mob)
+    if not mob or not mob.Parent then
+        return nil
+    end
+
+    return mob:FindFirstChild("HumanoidRootPart")
+        or mob:FindFirstChild("RootPart")
+        or mob:FindFirstChild("Torso")
+        or mob:FindFirstChild("UpperTorso")
+        or mob.PrimaryPart
+        or mob:FindFirstChildWhichIsA("BasePart", true)
+end
+
+local function getMobHealth(mob)
+    if not mob or not mob.Parent then
+        return nil
+    end
+
+    local humanoid = mob:FindFirstChildWhichIsA("Humanoid", true)
+
+    if humanoid then
+        return humanoid.Health
+    end
+
+    local attrs = {
+        "Health",
+        "health",
+        "HP",
+        "hp",
+        "NewHealth",
+        "CurrentHealth",
+        "currentHealth",
+        "Life",
+        "life"
+    }
+
+    for _, attr in ipairs(attrs) do
+        local value = mob:GetAttribute(attr)
+
+        if typeof(value) == "number" then
+            return value
+        end
+    end
+
+    return nil
+end
+
+local function isDeadByAttribute(mob)
+    local attrs = {
+        "Dead",
+        "dead",
+        "Killed",
+        "killed",
+        "IsDead",
+        "isDead",
+        "Died",
+        "died"
+    }
+
+    for _, attr in ipairs(attrs) do
+        if mob:GetAttribute(attr) == true then
+            return true
+        end
+    end
+
+    return false
+end
+
+local function isOwnedByPlayer(mob)
+    if not Config.BlacklistPlayerOwned then
+        return false
+    end
+
+    if not mob or not mob.Parent then
+        return true
+    end
+
+    local owner =
+        mob:GetAttribute("Owner")
+        or mob:GetAttribute("owner")
+        or mob:GetAttribute("OwnerId")
+        or mob:GetAttribute("ownerId")
+        or mob:GetAttribute("UserId")
+        or mob:GetAttribute("userId")
+        or mob:GetAttribute("Summoner")
+        or mob:GetAttribute("summoner")
+
+    if owner == nil or owner == "" or owner == 0 then
+        return false
+    end
+
+    if typeof(owner) == "Instance" then
+        if owner:IsA("Player") then
+            return true
+        end
+
+        if owner:IsA("Model") and Players:GetPlayerFromCharacter(owner) then
+            return true
+        end
+    end
+
+    if typeof(owner) == "number" then
+        return Players:GetPlayerByUserId(owner) ~= nil
+    end
+
+    if typeof(owner) == "string" then
+        local lowerOwner = string.lower(owner)
+
+        for _, player in ipairs(Players:GetPlayers()) do
+            if lowerOwner == string.lower(player.Name)
+                or lowerOwner == string.lower(player.DisplayName)
+                or lowerOwner == tostring(player.UserId)
+            then
+                return true
+            end
+        end
+    end
+
+    return owner == true
+end
+
+local function isValidMob(mob)
+    if not mob or not mob.Parent then
+        return false
+    end
+
+    if not mob:IsA("Model") then
+        return false
+    end
+
+    if isOwnedByPlayer(mob) then
+        return false
+    end
+
+    if isDeadByAttribute(mob) then
+        return false
+    end
+
+    local health = getMobHealth(mob)
+
+    if typeof(health) == "number" and health <= 0 then
+        return false
+    end
+
+    if not getMobRoot(mob) then
+        return false
+    end
+
+    return true
+end
+
+--// MOB CACHE
+local function getTopMobModel(model)
+    if not model or not model:IsA("Model") then
+        return nil
+    end
+
+    local current = model
+
+    while current.Parent and current.Parent ~= MobsFolder do
+        if current.Parent:IsA("Model") then
+            current = current.Parent
+        else
+            break
+        end
+    end
+
+    if current and current:IsDescendantOf(MobsFolder) then
+        return current
+    end
+
+    return model
+end
+
+local function rebuildMobCache()
+    local candidates = {}
+    local used = {}
+
+    for _, obj in ipairs(MobsFolder:GetChildren()) do
+        if obj:IsA("Model") then
+            local mob = getTopMobModel(obj)
+
+            if mob and not used[mob] then
+                used[mob] = true
+                candidates[#candidates + 1] = mob
+            end
+        end
+    end
+
+    for _, obj in ipairs(MobsFolder:GetDescendants()) do
+        if obj:IsA("Model") then
+            local mob = getTopMobModel(obj)
+
+            if mob and not used[mob] then
+                used[mob] = true
+                candidates[#candidates + 1] = mob
+            end
+        end
+    end
+
+    CachedMobCandidates = candidates
+    LastMobCacheRefresh = tick()
+end
+
+local function getMobCandidates()
+    if tick() - LastMobCacheRefresh >= Config.MobCacheRefresh then
+        rebuildMobCache()
+    end
+
+    return CachedMobCandidates
+end
+
+local function getSortedMobs(range)
+    local root = getRoot()
+
+    if not root then
+        return {}
+    end
+
+    local origin = root.Position
+    local found = {}
+
+    for _, mob in ipairs(getMobCandidates()) do
+        if isValidMob(mob) then
+            local mobRoot = getMobRoot(mob)
+
+            if mobRoot and mobRoot.Parent then
+                local distance = (mobRoot.Position - origin).Magnitude
+
+                if distance <= range then
+                    local health = getMobHealth(mob) or math.huge
+
+                    found[#found + 1] = {
+                        Mob = mob,
+                        Root = mobRoot,
+                        Distance = distance,
+                        Health = health,
+                        Score = distance + math.clamp(health / 25, 0, 30)
+                    }
+                end
+            end
+        end
+    end
+
+    table.sort(found, function(a, b)
+        if math.abs(a.Distance - b.Distance) <= 5 then
+            return a.Health < b.Health
+        end
+
+        return a.Score < b.Score
+    end)
+
+    return found
+end
+
+local function getClosestAttackMobs()
+    local sorted = getSortedMobs(Config.AttackRange)
+    local mobs = {}
+
+    LastDetectedCount = #sorted
+
+    for i = 1, math.min(CurrentMobLimit, #sorted) do
+        local mob = sorted[i].Mob
+
+        if isValidMob(mob) then
+            mobs[#mobs + 1] = mob
+        end
+    end
+
+    return mobs, sorted
+end
+
+local function getNearestTweenMob()
+    local sorted = getSortedMobs(Config.TweenRange)
+
+    if sorted[1] and isValidMob(sorted[1].Mob) then
+        return sorted[1].Mob
+    end
+
+    return nil
+end
+
+--// SAFETY
+local function applyNoClip()
+    if not Config.NoClip then
+        return
+    end
+
+    local character = getCharacter()
+
+    if not character then
+        return
+    end
+
+    for _, obj in ipairs(character:GetDescendants()) do
+        if obj:IsA("BasePart") then
+            obj.CanCollide = false
+        end
+    end
+end
+
+local function applyAntiSit()
+    if not Config.AntiSit then
+        return
+    end
+
+    local humanoid = getHumanoid()
+
+    if humanoid then
+        humanoid.Sit = false
+        humanoid.PlatformStand = false
+    end
+end
+
+local function clearVelocity(root)
+    if not root then
+        return
+    end
+
+    root.AssemblyLinearVelocity = Vector3.zero
+    root.AssemblyAngularVelocity = Vector3.zero
+end
+
+--// MOVEMENT
+local function flyAboveMob(dt, mob)
+    if not Config.Enabled then
+        return
+    end
+
+    if not isPlayerAlive() or not isValidMob(mob) then
+        return
+    end
+
+    local root = getRoot()
+    local mobRoot = getMobRoot(mob)
+
+    if not root or not mobRoot then
+        return
+    end
+
+    DodgeAngle += dt * Config.DodgeSpeed
+
+    local dodgeOffset = Vector3.zero
+
+    if Config.DodgeEnabled then
+        dodgeOffset = Vector3.new(
+            math.cos(DodgeAngle) * Config.DodgeRadius,
+            0,
+            math.sin(DodgeAngle) * Config.DodgeRadius
+        )
+    end
+
+    local targetPosition =
+        mobRoot.Position
+        + Vector3.new(0, Config.AboveHeight, 0)
+        + dodgeOffset
+
+    local currentPosition = root.Position
+    local offset = targetPosition - currentPosition
+    local distance = offset.Magnitude
+
+    LastDistanceToTarget = math.floor(distance)
+
+    clearVelocity(root)
+
+    local newPosition
+
+    if distance <= Config.ArriveDistance then
+        newPosition = targetPosition
+    else
+        local direction = offset.Unit
+        local moveAmount = math.min(Config.MoveSpeed * dt, distance)
+        newPosition = currentPosition + direction * moveAmount
+    end
+
+    root.CFrame = CFrame.lookAt(newPosition, mobRoot.Position)
+    LastTargetName = mob.Name
+end
+
+local function checkStuck(dt)
+    local root = getRoot()
+
+    if not root or not CurrentTarget then
+        LastPosition = nil
+        StuckTimer = 0
+        return
+    end
+
+    if not LastPosition then
+        LastPosition = root.Position
+        StuckTimer = 0
+        return
+    end
+
+    local moved = (root.Position - LastPosition).Magnitude
+    LastPosition = root.Position
+
+    if moved < 0.35 and LastDistanceToTarget > 20 then
+        StuckTimer += dt
+    else
+        StuckTimer = 0
+    end
+
+    if StuckTimer >= 1.25 then
+        CurrentTarget = nil
+        StuckTimer = 0
+        LastStatus = "Retargeted: stuck"
+    end
+end
+
+local function refreshTarget()
+    if not Config.Enabled then
+        CurrentTarget = nil
+        return
+    end
+
+    if not isValidMob(CurrentTarget) then
+        CurrentTarget = getNearestTweenMob()
+        return
+    end
+
+    local nearest = getNearestTweenMob()
+
+    if nearest and nearest ~= CurrentTarget then
+        local root = getRoot()
+        local currentRoot = getMobRoot(CurrentTarget)
+        local nearestRoot = getMobRoot(nearest)
+
+        if root and currentRoot and nearestRoot then
+            local currentDistance = (currentRoot.Position - root.Position).Magnitude
+            local nearestDistance = (nearestRoot.Position - root.Position).Magnitude
+
+            if nearestDistance + 12 < currentDistance then
+                CurrentTarget = nearest
+                LastStatus = "Switched target"
+            end
+        end
+    end
+end
+
+--// ATTACK
+local function lowerMobLimit()
+    if CurrentMobLimit > Config.MinMobsPerAttack then
+        CurrentMobLimit -= 1
+        LastStatus = "Lowered mob limit to " .. tostring(CurrentMobLimit)
+    end
+end
+
+local function recoverMobLimit()
+    if CurrentMobLimit < Config.StartMobsPerAttack and tick() - LastGoodAttack >= Config.RecoverAfterSeconds then
+        CurrentMobLimit += 1
+        LastGoodAttack = tick()
+        LastStatus = "Recovered mob limit to " .. tostring(CurrentMobLimit)
+    end
+end
+
+local function attackMobs(workerName)
+    if not Config.Enabled then
+        return 0
+    end
+
+    if stopIfServerUnsafe() then
+        return 0
+    end
+
+    local mobs = getClosestAttackMobs()
+
+    if #mobs <= 0 then
+        LastAttackCount = 0
+        return 0
+    end
+
+    local clean = {}
+
+    for _, mob in ipairs(mobs) do
+        if isValidMob(mob) then
+            clean[#clean + 1] = mob
+        end
+    end
+
+    if #clean <= 0 then
+        LastAttackCount = 0
+        return 0
+    end
+
+    local success = pcall(function()
+        PlayerAttack:FireServer(clean)
+    end)
+
+    LastAttackCount = #clean
+
+    if success then
+        FailCount = 0
+        LastGoodAttack = tick()
+        LastStatus = workerName .. " fired " .. tostring(#clean)
+    else
+        FailCount += 1
+        LastStatus = workerName .. " failed"
+
+        if FailCount >= Config.FailsBeforeLowering then
+            FailCount = 0
+            lowerMobLimit()
+        end
+    end
+
+    return #clean
+end
+
+local function getCurrentAttackDelay()
+    local mobs = getClosestAttackMobs()
+
+    if #mobs == 1 then
+        return Config.SoloAttackDelay
+    end
+
+    return Config.AttackDelay
+end
+
+--// GUI
+local function updateAutoResetButton()
+    if AutoResetButton then
+        AutoResetButton.Text = "Auto Reset On Execute: " .. tostring(Config.AutoResetOnExecution)
+    end
+end
+
+local function updateAutoClaimButton()
+    if AutoClaimButton then
+        AutoClaimButton.Text = "Auto Claim: " .. tostring(Config.AutoClaim)
+    end
+end
+
+local function updateAutoGoAgainButton()
+    if AutoGoAgainButton then
+        AutoGoAgainButton.Text = "Auto Go Again: " .. tostring(Config.AutoGoAgain)
+    end
+end
+
+local function updateAutoReExecuteButton()
+    if AutoReExecuteButton then
+        AutoReExecuteButton.Text = "Queue/AutoExec: " .. tostring(Config.AutoReExecuteOnTeleport)
+    end
+end
+
+local function makeGui()
+    local old = PlayerGui:FindFirstChild("SmartAuraClaimAutoFarmGui")
+    if old then
+        old:Destroy()
+    end
+
+    Gui = Instance.new("ScreenGui")
+    Gui.Name = "SmartAuraClaimAutoFarmGui"
+    Gui.ResetOnSpawn = false
+    Gui.Parent = PlayerGui
+
+    local frame = Instance.new("Frame")
+    frame.Size = UDim2.fromOffset(315, 355)
+    frame.Position = UDim2.fromOffset(25, 170)
+    frame.BackgroundColor3 = Color3.fromRGB(15, 15, 18)
+    frame.BackgroundTransparency = 0.12
+    frame.BorderSizePixel = 0
+    frame.Active = true
+    frame.Draggable = true
+    frame.Parent = Gui
+
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 12)
+    corner.Parent = frame
+
+    local title = Instance.new("TextLabel")
+    title.Size = UDim2.new(1, -16, 0, 26)
+    title.Position = UDim2.fromOffset(8, 6)
+    title.BackgroundTransparency = 1
+    title.Font = Enum.Font.GothamBold
+    title.TextSize = 14
+    title.TextXAlignment = Enum.TextXAlignment.Left
+    title.TextColor3 = Color3.fromRGB(255, 255, 255)
+    title.Text = "Smart Farm + Queue AutoExec"
+    title.Parent = frame
+
+    StatusLabel = Instance.new("TextLabel")
+    StatusLabel.Size = UDim2.new(1, -16, 0, 140)
+    StatusLabel.Position = UDim2.fromOffset(8, 34)
+    StatusLabel.BackgroundTransparency = 1
+    StatusLabel.Font = Enum.Font.Gotham
+    StatusLabel.TextSize = 12
+    StatusLabel.TextXAlignment = Enum.TextXAlignment.Left
+    StatusLabel.TextYAlignment = Enum.TextYAlignment.Top
+    StatusLabel.TextColor3 = Color3.fromRGB(210, 210, 215)
+    StatusLabel.Text = "Loading..."
+    StatusLabel.Parent = frame
+
+    AutoResetButton = Instance.new("TextButton")
+    AutoResetButton.Size = UDim2.fromOffset(295, 30)
+    AutoResetButton.Position = UDim2.fromOffset(10, 180)
+    AutoResetButton.BackgroundColor3 = Color3.fromRGB(35, 35, 42)
+    AutoResetButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+    AutoResetButton.Font = Enum.Font.GothamSemibold
+    AutoResetButton.TextSize = 12
+    AutoResetButton.Text = "Auto Reset On Execute: " .. tostring(Config.AutoResetOnExecution)
+    AutoResetButton.Parent = frame
+    Instance.new("UICorner", AutoResetButton).CornerRadius = UDim.new(0, 8)
+
+    AutoResetButton.MouseButton1Click:Connect(function()
+        Config.AutoResetOnExecution = not Config.AutoResetOnExecution
+        updateAutoResetButton()
+        saveSettings()
+        LastStatus = "Auto reset saved: " .. tostring(Config.AutoResetOnExecution)
+    end)
+
+    AutoClaimButton = Instance.new("TextButton")
+    AutoClaimButton.Size = UDim2.fromOffset(295, 30)
+    AutoClaimButton.Position = UDim2.fromOffset(10, 215)
+    AutoClaimButton.BackgroundColor3 = Color3.fromRGB(35, 35, 42)
+    AutoClaimButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+    AutoClaimButton.Font = Enum.Font.GothamSemibold
+    AutoClaimButton.TextSize = 12
+    AutoClaimButton.Text = "Auto Claim: " .. tostring(Config.AutoClaim)
+    AutoClaimButton.Parent = frame
+    Instance.new("UICorner", AutoClaimButton).CornerRadius = UDim.new(0, 8)
+
+    AutoClaimButton.MouseButton1Click:Connect(function()
+        Config.AutoClaim = not Config.AutoClaim
+        updateAutoClaimButton()
+        saveSettings()
+        LastStatus = "Auto claim saved: " .. tostring(Config.AutoClaim)
+    end)
+
+    AutoGoAgainButton = Instance.new("TextButton")
+    AutoGoAgainButton.Size = UDim2.fromOffset(295, 30)
+    AutoGoAgainButton.Position = UDim2.fromOffset(10, 250)
+    AutoGoAgainButton.BackgroundColor3 = Color3.fromRGB(35, 35, 42)
+    AutoGoAgainButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+    AutoGoAgainButton.Font = Enum.Font.GothamSemibold
+    AutoGoAgainButton.TextSize = 12
+    AutoGoAgainButton.Text = "Auto Go Again: " .. tostring(Config.AutoGoAgain)
+    AutoGoAgainButton.Parent = frame
+    Instance.new("UICorner", AutoGoAgainButton).CornerRadius = UDim.new(0, 8)
+
+    AutoGoAgainButton.MouseButton1Click:Connect(function()
+        Config.AutoGoAgain = not Config.AutoGoAgain
+        updateAutoGoAgainButton()
+        saveSettings()
+        LastStatus = "Auto Go Again saved: " .. tostring(Config.AutoGoAgain)
+    end)
+
+    AutoReExecuteButton = Instance.new("TextButton")
+    AutoReExecuteButton.Size = UDim2.fromOffset(295, 30)
+    AutoReExecuteButton.Position = UDim2.fromOffset(10, 285)
+    AutoReExecuteButton.BackgroundColor3 = Color3.fromRGB(35, 35, 42)
+    AutoReExecuteButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+    AutoReExecuteButton.Font = Enum.Font.GothamSemibold
+    AutoReExecuteButton.TextSize = 12
+    AutoReExecuteButton.Text = "Queue/AutoExec: " .. tostring(Config.AutoReExecuteOnTeleport)
+    AutoReExecuteButton.Parent = frame
+    Instance.new("UICorner", AutoReExecuteButton).CornerRadius = UDim.new(0, 8)
+
+    AutoReExecuteButton.MouseButton1Click:Connect(function()
+        Config.AutoReExecuteOnTeleport = not Config.AutoReExecuteOnTeleport
+        updateAutoReExecuteButton()
+        saveSettings()
+
+        if Config.AutoReExecuteOnTeleport then
+            installAutoExecuteLoader()
+        end
+
+        LastStatus = "Queue/AutoExec saved: " .. tostring(Config.AutoReExecuteOnTeleport)
+    end)
+
+    local hint = Instance.new("TextLabel")
+    hint.Size = UDim2.new(1, -16, 0, 25)
+    hint.Position = UDim2.fromOffset(8, 325)
+    hint.BackgroundTransparency = 1
+    hint.Font = Enum.Font.GothamSemibold
+    hint.TextSize = 11
+    hint.TextXAlignment = Enum.TextXAlignment.Left
+    hint.TextColor3 = Color3.fromRGB(160, 160, 170)
+    hint.Text = "N = Toggle Farm | RightControl = Hide GUI"
+    hint.Parent = frame
+end
+
+local function updateGui()
+    if not StatusLabel then
+        return
+    end
+
+    local count = #Players:GetPlayers()
+    local resetMode = "Normal x" .. tostring(Config.ResetAmount)
+
+    if count == 1 then
+        resetMode = "Alone x" .. tostring(Config.AloneServerResetAmount)
+    elseif count == 2 or count == 3 then
+        resetMode = "Small x" .. tostring(Config.SmallServerResetAmount)
+    end
+
+    StatusLabel.Text =
+        "Enabled: " .. tostring(Config.Enabled) ..
+        "\nPlayers: " .. tostring(count) .. "/" .. tostring(Config.MaxServerPlayers) ..
+        "\nResetMode: " .. resetMode ..
+        "\nAutoResetOnExecution: " .. tostring(Config.AutoResetOnExecution) ..
+        "\nTarget: " .. tostring(LastTargetName) ..
+        "\nTarget distance: " .. tostring(LastDistanceToTarget) ..
+        "\nDetected in 100: " .. tostring(LastDetectedCount) ..
+        "\nAttacking: " .. tostring(LastAttackCount) .. "/" .. tostring(CurrentMobLimit) ..
+        "\nAutoClaim: " .. tostring(Config.AutoClaim) ..
+        "\nAutoGoAgain: " .. tostring(Config.AutoGoAgain) ..
+        "\nQueueAutoExec: " .. tostring(Config.AutoReExecuteOnTeleport) ..
+        "\nStatus: " .. tostring(LastStatus)
+end
+
+makeGui()
+rebuildMobCache()
+
+--// INPUT
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then
+        return
+    end
+
+    if input.KeyCode == Config.ToggleKey then
+        if Config.Enabled then
+            stopAutoFarm()
+        else
+            startAutoFarm()
+        end
+    end
+
+    if input.KeyCode == Config.GuiToggleKey then
+        if Gui then
+            Gui.Enabled = not Gui.Enabled
+        end
+    end
+end)
+
+--// RESPAWN
+LocalPlayer.CharacterAdded:Connect(function()
+    CurrentTarget = nil
+    LastTargetName = "None"
+    LastStatus = "Respawned"
+    LastPosition = nil
+    StuckTimer = 0
+end)
+
+--// MOVEMENT LOOP
+RunService.PreSimulation:Connect(function(dt)
+    updateGui()
+
+    if not Config.Enabled then
+        return
+    end
+
+    if stopIfServerUnsafe() then
+        return
+    end
+
+    if not isPlayerAlive() then
+        CurrentTarget = nil
+        return
+    end
+
+    applyNoClip()
+    applyAntiSit()
+    checkStuck(dt)
+
+    local now = tick()
+
+    if now - LastTargetRefresh >= Config.TargetRefreshRate then
+        LastTargetRefresh = now
+        pcall(refreshTarget)
+    end
+
+    if CurrentTarget and isValidMob(CurrentTarget) then
+        pcall(function()
+            flyAboveMob(dt, CurrentTarget)
+        end)
+    end
+
+    recoverMobLimit()
+end)
+
+--// ATTACK WORKERS
+local function startAttackWorker(workerName, startDelay)
+    task.spawn(function()
+        task.wait(startDelay)
+
+        while task.wait(0.05) do
+            if Config.Enabled then
+                if stopIfServerUnsafe() then
+                    task.wait(1)
+                    continue
+                end
+
+                local mobs = getClosestAttackMobs()
+
+                if #mobs > 0 then
+                    attackMobs(workerName)
+                    task.wait(getCurrentAttackDelay())
+                else
+                    LastAttackCount = 0
+                    task.wait(0.5)
+                end
+            else
+                task.wait(0.5)
+            end
+        end
+    end)
+end
+
+startAttackWorker("Loop1", 0)
+
+if Config.OverlapAttackLoops then
+    startAttackWorker("Loop2", Config.AttackDelay / 2)
+end
+
+--// AUTO START SEQUENCE
+task.spawn(function()
+    Config.Enabled = false
+
+    if stopIfServerUnsafe() then
+        return
+    end
+
+    Config.AutoReExecuteOnTeleport = true
+    installAutoExecuteLoader()
+
+    LastStatus = "Waiting " .. tostring(Config.StartDungeonDelay) .. "s before dungeon start..."
+
+    task.wait(Config.StartDungeonDelay)
+
+    if stopIfServerUnsafe() then
+        return
+    end
+
+    pcall(function()
+        TriggerStartDungeon:FireServer()
+    end)
+
+    LastStatus = "Dungeon start remote fired"
+
+    task.wait(0.5)
+
+    if Config.AutoResetOnExecution then
+        local resetAmount, resetStatus = getStartupResetAmount()
+        LastStatus = resetStatus
+        resetCharacterTimes(resetAmount)
+        task.wait(0.5)
+    else
+        LastStatus = "Auto reset skipped"
+        task.wait(0.5)
+    end
+
+    startAutoFarm()
+end)
