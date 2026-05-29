@@ -1,0 +1,745 @@
+--// CrimmyRoute_MenuXD_MainTab.lua
+--// Uses your MenuXD/Ventura UI library with a Main tab + toggle button.
+--// UI Lib: https://raw.githubusercontent.com/DestroyTheO/MenuXD/refs/heads/main/Main
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local Lighting = game:GetService("Lighting")
+
+local LocalPlayer = Players.LocalPlayer
+
+--// Load UI library only, without its built-in example window.
+pcall(function()
+    if type(getgenv) == "function" then
+        getgenv().VENTURA_SKIP_EXAMPLE = true
+    end
+end)
+
+local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/DestroyTheO/MenuXD/refs/heads/main/Main"))()
+
+--// Fullbright on load
+pcall(function()
+    Lighting.Brightness = 2
+    Lighting.ClockTime = 14
+    Lighting.FogEnd = 100000
+    Lighting.GlobalShadows = false
+    Lighting.OutdoorAmbient = Color3.fromRGB(255, 255, 255)
+    Lighting.Ambient = Color3.fromRGB(255, 255, 255)
+end)
+
+--// Prevent duplicate route controllers
+local GlobalEnv = (type(getgenv) == "function" and getgenv()) or _G
+GlobalEnv.CrimmyRouteMenuXDController = GlobalEnv.CrimmyRouteMenuXDController or {}
+local Controller = GlobalEnv.CrimmyRouteMenuXDController
+
+if Controller.Destroy then
+    Controller.Destroy()
+end
+
+--// Route points - same route logic
+local FIRST_Y = 370
+local FIRST_POINT = Vector3.new(235, 370, 512)
+local FINAL_POINT = Vector3.new(14, 517, 431)
+local OVERHEAD_Y = 560
+
+--// Speeds
+local SPAWN_DELAY = 0.35
+local Y_MOVE_SPEED = 24
+local FIRST_POINT_SPEED = 28
+local UP_SPEED = 50
+local OVERHEAD_MOVE_SPEED = 28
+local DROP_SPEED = 22
+local TOLERANCE = 2
+
+--// Loop delay after reaching final point
+local AUTO_RERUN_DELAY = 17
+
+--// Off-course protection
+local SOFT_ROUTE_CORRECTION_DISTANCE = 8
+local HARD_OFF_ROUTE_DISTANCE = 45
+local STUCK_TIME = 4
+local STUCK_MIN_MOVE = 2.5
+local SEGMENT_TIMEOUT_EXTRA = 8
+local RESET_COOLDOWN = 5
+
+--// Reconnect checks
+local AUTO_RECONNECT_INTERVAL = 0.25
+local START_RETRY_COOLDOWN = 0.75
+local FINAL_RESTART_DISTANCE = 80
+local SAME_CHARACTER_JUMP_DISTANCE = 75
+
+--// Toggle default
+local DEFAULT_ROUTE_ENABLED = true
+local enabled = DEFAULT_ROUTE_ENABLED
+
+local activeMoveConnection
+local noclipConnection
+local characterAddedConnection
+local characterChangedConnection
+local autoReconnectConnection
+local humanoidDiedConnection
+
+local routeToken = 0
+local currentCharacter = nil
+local routeRunning = false
+local routeCompleted = false
+
+local lastResetClock = 0
+local lastStartAttempt = 0
+local lastReconnectCheck = 0
+local lastCharacterForPosition = nil
+local lastCharacterPosition = nil
+
+local startRoute
+local routeToggleControl
+
+local function routeWarn(...)
+    warn("[CrimmyRoute]", ...)
+end
+
+local function stopMove()
+    if activeMoveConnection then
+        activeMoveConnection:Disconnect()
+        activeMoveConnection = nil
+    end
+end
+
+local function stopNoclip()
+    if noclipConnection then
+        noclipConnection:Disconnect()
+        noclipConnection = nil
+    end
+end
+
+local function stopHumanoidDiedConnection()
+    if humanoidDiedConnection then
+        humanoidDiedConnection:Disconnect()
+        humanoidDiedConnection = nil
+    end
+end
+
+local function setNoclip(character)
+    if not character then return end
+
+    for _, obj in ipairs(character:GetDescendants()) do
+        if obj:IsA("BasePart") then
+            obj.CanCollide = false
+        end
+    end
+end
+
+local function startNoclip(character)
+    stopNoclip()
+
+    noclipConnection = RunService.Stepped:Connect(function()
+        if not enabled then
+            stopNoclip()
+            return
+        end
+
+        if not character or not character.Parent then
+            stopNoclip()
+            return
+        end
+
+        setNoclip(character)
+    end)
+end
+
+local function getLookTarget(position)
+    local flatFinal = Vector3.new(FINAL_POINT.X, position.Y, FINAL_POINT.Z)
+
+    if (flatFinal - position).Magnitude < 1 then
+        return position + Vector3.new(0, 0, -10)
+    end
+
+    return flatFinal
+end
+
+local function safeLookAt(position)
+    return CFrame.lookAt(position, getLookTarget(position))
+end
+
+local function getClosestPointOnSegment(point, a, b)
+    local ab = b - a
+    local lengthSquared = ab:Dot(ab)
+
+    if lengthSquared <= 0.001 then
+        return a
+    end
+
+    local t = math.clamp((point - a):Dot(ab) / lengthSquared, 0, 1)
+    return a + ab * t
+end
+
+local function softRestartRoute(character, reason)
+    if not enabled then return end
+    if not character or not character.Parent then return end
+
+    routeToken += 1
+    currentCharacter = nil
+    routeRunning = false
+    routeCompleted = false
+
+    stopMove()
+    stopNoclip()
+    stopHumanoidDiedConnection()
+
+    routeWarn("Restarting route:", reason or "Restart requested")
+
+    task.delay(0.2, function()
+        if not enabled then return end
+        if not character or not character.Parent then return end
+
+        local root = character:FindFirstChild("HumanoidRootPart")
+        local humanoid = character:FindFirstChildOfClass("Humanoid")
+
+        if root and humanoid and humanoid.Health > 0 then
+            task.spawn(startRoute, character)
+        else
+            routeWarn("Restart waiting: character/root/humanoid not ready")
+        end
+    end)
+end
+
+local function resetCharacter(reason)
+    if not enabled then return end
+
+    local now = os.clock()
+    if now - lastResetClock < RESET_COOLDOWN then
+        routeWarn("Reset blocked: cooldown active")
+        return
+    end
+
+    lastResetClock = now
+
+    routeToken += 1
+    currentCharacter = nil
+    routeRunning = false
+    routeCompleted = false
+
+    stopMove()
+    stopNoclip()
+    stopHumanoidDiedConnection()
+
+    routeWarn("Resetting character:", reason or "Unknown reason")
+
+    local character = LocalPlayer.Character
+    local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+
+    if humanoid then
+        pcall(function()
+            humanoid.Health = 0
+        end)
+    elseif character then
+        pcall(function()
+            character:BreakJoints()
+        end)
+    end
+
+    --// Some games teleport the same character instead of truly respawning it.
+    task.delay(1.25, function()
+        local sameCharacter = LocalPlayer.Character
+        local root = sameCharacter and sameCharacter:FindFirstChild("HumanoidRootPart")
+        local hum = sameCharacter and sameCharacter:FindFirstChildOfClass("Humanoid")
+
+        if enabled and sameCharacter and root and hum and hum.Health > 0 then
+            softRestartRoute(sameCharacter, "Same character was teleported instead of respawned")
+        end
+    end)
+end
+
+local function moveTo(root, targetProvider, speed, token, stepName, onFinished)
+    stopMove()
+
+    local segmentStart = root.Position
+    local segmentTarget = targetProvider(segmentStart)
+
+    local segmentDistance = math.max((segmentTarget - segmentStart).Magnitude, 1)
+    local segmentStartClock = os.clock()
+    local segmentTimeout = (segmentDistance / math.max(speed, 1)) + SEGMENT_TIMEOUT_EXTRA
+
+    local lastMovePosition = root.Position
+    local lastMoveClock = os.clock()
+
+    routeWarn(stepName, "->", tostring(segmentTarget))
+
+    activeMoveConnection = RunService.Heartbeat:Connect(function(dt)
+        if token ~= routeToken then
+            stopMove()
+            return
+        end
+
+        if not enabled then
+            stopMove()
+            return
+        end
+
+        if not root or not root.Parent then
+            stopMove()
+            return
+        end
+
+        root.AssemblyLinearVelocity = Vector3.zero
+        root.AssemblyAngularVelocity = Vector3.zero
+
+        local rawPosition = root.Position
+        local closestOnRoute = getClosestPointOnSegment(rawPosition, segmentStart, segmentTarget)
+        local offRouteDistance = (rawPosition - closestOnRoute).Magnitude
+
+        if offRouteDistance > HARD_OFF_ROUTE_DISTANCE then
+            resetCharacter("Hard off-route: " .. math.floor(offRouteDistance) .. " studs")
+            return
+        end
+
+        local currentPosition = closestOnRoute
+
+        --// Small drift gets corrected back to the route line.
+        if offRouteDistance > SOFT_ROUTE_CORRECTION_DISTANCE then
+            root.CFrame = safeLookAt(currentPosition)
+        end
+
+        local offset = segmentTarget - currentPosition
+        local distance = offset.Magnitude
+
+        if (currentPosition - lastMovePosition).Magnitude >= STUCK_MIN_MOVE then
+            lastMovePosition = currentPosition
+            lastMoveClock = os.clock()
+        elseif os.clock() - lastMoveClock >= STUCK_TIME and distance > TOLERANCE + 3 then
+            resetCharacter("Stuck on " .. stepName)
+            return
+        end
+
+        if os.clock() - segmentStartClock > segmentTimeout and distance > TOLERANCE + 3 then
+            resetCharacter("Timeout on " .. stepName)
+            return
+        end
+
+        if distance <= TOLERANCE then
+            root.CFrame = safeLookAt(segmentTarget)
+            stopMove()
+
+            if onFinished then
+                task.defer(onFinished)
+            end
+
+            return
+        end
+
+        local step = math.min(speed * dt, distance)
+        local newPosition = currentPosition + offset.Unit * step
+
+        root.CFrame = safeLookAt(newPosition)
+    end)
+end
+
+local function scheduleNextRun(character, finishedToken)
+    routeWarn("Arrived. Waiting", AUTO_RERUN_DELAY, "seconds, then running again")
+
+    task.delay(AUTO_RERUN_DELAY, function()
+        if not enabled then return end
+        if finishedToken ~= routeToken then return end
+        if not character or not character.Parent then return end
+
+        local root = character:FindFirstChild("HumanoidRootPart")
+        local humanoid = character:FindFirstChildOfClass("Humanoid")
+
+        if not root or not humanoid or humanoid.Health <= 0 then
+            return
+        end
+
+        routeRunning = false
+        routeCompleted = false
+        currentCharacter = nil
+
+        task.spawn(startRoute, character)
+    end)
+end
+
+startRoute = function(character)
+    if not enabled then return end
+    if routeRunning then return end
+    if not character or not character.Parent then return end
+
+    routeToken += 1
+    local token = routeToken
+
+    currentCharacter = character
+    routeRunning = true
+    routeCompleted = false
+
+    stopMove()
+    stopNoclip()
+
+    local root = character:WaitForChild("HumanoidRootPart", 10)
+    local humanoid = character:WaitForChild("Humanoid", 10)
+
+    if token ~= routeToken then
+        routeRunning = false
+        return
+    end
+
+    if not root or not humanoid or humanoid.Health <= 0 then
+        currentCharacter = nil
+        routeRunning = false
+        return
+    end
+
+    stopHumanoidDiedConnection()
+    humanoidDiedConnection = humanoid.Died:Connect(function()
+        if currentCharacter == character then
+            routeToken += 1
+            routeRunning = false
+            routeCompleted = false
+            currentCharacter = nil
+
+            stopMove()
+            stopNoclip()
+        end
+    end)
+
+    task.wait(SPAWN_DELAY)
+
+    if token ~= routeToken then
+        routeRunning = false
+        return
+    end
+
+    if not enabled then
+        routeRunning = false
+        return
+    end
+
+    if not root.Parent or humanoid.Health <= 0 then
+        currentCharacter = nil
+        routeRunning = false
+        return
+    end
+
+    startNoclip(character)
+    humanoid:ChangeState(Enum.HumanoidStateType.Physics)
+
+    --// Step 1: go to Y = 370, keeping spawn X/Z
+    moveTo(
+        root,
+        function(currentPosition)
+            return Vector3.new(currentPosition.X, FIRST_Y, currentPosition.Z)
+        end,
+        Y_MOVE_SPEED,
+        token,
+        "Step 1/5: Going to Y 370",
+        function()
+            if token ~= routeToken then return end
+            if not enabled or not root.Parent then return end
+
+            --// Step 2: go to 235, 370, 512
+            moveTo(
+                root,
+                function()
+                    return FIRST_POINT
+                end,
+                FIRST_POINT_SPEED,
+                token,
+                "Step 2/5: Going to first point",
+                function()
+                    if token ~= routeToken then return end
+                    if not enabled or not root.Parent then return end
+
+                    --// Step 3: go straight up above ground
+                    moveTo(
+                        root,
+                        function(currentPosition)
+                            return Vector3.new(currentPosition.X, OVERHEAD_Y, currentPosition.Z)
+                        end,
+                        UP_SPEED,
+                        token,
+                        "Step 3/5: Going straight up",
+                        function()
+                            if token ~= routeToken then return end
+                            if not enabled or not root.Parent then return end
+
+                            --// Step 4: move across overhead
+                            moveTo(
+                                root,
+                                function()
+                                    return Vector3.new(FINAL_POINT.X, OVERHEAD_Y, FINAL_POINT.Z)
+                                end,
+                                OVERHEAD_MOVE_SPEED,
+                                token,
+                                "Step 4/5: Moving across overhead",
+                                function()
+                                    if token ~= routeToken then return end
+                                    if not enabled or not root.Parent then return end
+
+                                    --// Step 5: drop to final point
+                                    moveTo(
+                                        root,
+                                        function()
+                                            return FINAL_POINT
+                                        end,
+                                        DROP_SPEED,
+                                        token,
+                                        "Step 5/5: Dropping to final point",
+                                        function()
+                                            if token ~= routeToken then return end
+
+                                            routeRunning = false
+                                            routeCompleted = true
+                                            currentCharacter = character
+
+                                            if humanoid and humanoid.Parent then
+                                                humanoid:ChangeState(Enum.HumanoidStateType.Running)
+                                            end
+
+                                            if enabled then
+                                                startNoclip(character)
+                                                scheduleNextRun(character, token)
+                                            end
+                                        end
+                                    )
+                                end
+                            )
+                        end
+                    )
+                end
+            )
+        end
+    )
+end
+
+local function fullStop()
+    routeToken += 1
+    currentCharacter = nil
+    routeRunning = false
+    routeCompleted = false
+
+    stopMove()
+    stopNoclip()
+    stopHumanoidDiedConnection()
+
+    local character = LocalPlayer.Character
+    local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+
+    if humanoid then
+        humanoid:ChangeState(Enum.HumanoidStateType.Running)
+    end
+end
+
+local function forceReconnectStart()
+    if not enabled then return end
+
+    local now = os.clock()
+    if now - lastStartAttempt < START_RETRY_COOLDOWN then
+        return
+    end
+
+    lastStartAttempt = now
+
+    local character = LocalPlayer.Character
+
+    if not character or not character.Parent then
+        currentCharacter = nil
+        routeRunning = false
+        routeCompleted = false
+        return
+    end
+
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    local root = character:FindFirstChild("HumanoidRootPart")
+
+    if not root or not humanoid or humanoid.Health <= 0 then
+        currentCharacter = nil
+        routeRunning = false
+        routeCompleted = false
+        return
+    end
+
+    if lastCharacterForPosition == character and lastCharacterPosition then
+        local jumpDistance = (root.Position - lastCharacterPosition).Magnitude
+
+        if routeRunning and jumpDistance > SAME_CHARACTER_JUMP_DISTANCE then
+            softRestartRoute(character, "Same character jumped " .. math.floor(jumpDistance) .. " studs")
+            lastCharacterPosition = root.Position
+            return
+        end
+    end
+
+    lastCharacterForPosition = character
+    lastCharacterPosition = root.Position
+
+    if currentCharacter ~= character then
+        routeToken += 1
+        stopMove()
+        stopNoclip()
+        stopHumanoidDiedConnection()
+
+        currentCharacter = nil
+        routeRunning = false
+        routeCompleted = false
+
+        task.spawn(startRoute, character)
+        return
+    end
+
+    if routeCompleted and not routeRunning then
+        local distanceFromFinal = (root.Position - FINAL_POINT).Magnitude
+
+        if distanceFromFinal > FINAL_RESTART_DISTANCE then
+            softRestartRoute(character, "Moved away from final point: " .. math.floor(distanceFromFinal) .. " studs")
+            return
+        end
+    end
+
+    if not routeRunning and not routeCompleted then
+        task.spawn(startRoute, character)
+        return
+    end
+end
+
+local function setEnabled(value)
+    enabled = value == true
+
+    if enabled then
+        currentCharacter = nil
+        routeRunning = false
+        routeCompleted = false
+        lastCharacterForPosition = nil
+        lastCharacterPosition = nil
+        forceReconnectStart()
+    else
+        fullStop()
+    end
+end
+
+--// UI Lib setup: Main tab + toggle button
+local Window = Library:new({
+    name = "CrimmyScriptz",
+    subtitle = {
+        "Loading route controller.",
+        "Building Main tab.",
+        "Ready."
+    },
+    theme = "Space",
+    followThemeAccent = true,
+    watermark = "CrimmyScriptz | Route",
+    watermarkStats = true,
+    watermarkRuntime = false,
+    loadingTime = 1.1,
+    toggleKey = Enum.KeyCode.RightControl,
+    toggleCreatesBubble = true,
+    responsiveScale = true,
+    resizeSnap = true,
+    resizeSnapMode = "center",
+    safeLoad = true,
+    slowLoad = false,
+    autoLoad = false,
+    autoLoadConfig = false,
+    configAutoLoad = false,
+    configProfile = "CrimmyRoute_MenuXD",
+    floatingMiniUI = false,
+    goodbyeNotification = false,
+})
+
+Window:NavSection("Main")
+
+local MainTab = Window:CreateTab({
+    name = "Main",
+    icon = (Library.Icons and (Library.Icons.tp or Library.Icons.home)) or "🏠",
+})
+
+MainTab:Section({
+    name = "Route Controls",
+    subtitle = "Toggle the route loop on/off.",
+    icon = (Library.Icons and (Library.Icons.tp or Library.Icons.location)) or "📍",
+})
+
+local toggleOptions = {
+    name = "Auto Route Loop",
+    description = "Runs the route, waits 17 seconds at the final point, then repeats.",
+    icon = (Library.Icons and (Library.Icons.fly or Library.Icons.tp)) or "✈️",
+    default = DEFAULT_ROUTE_ENABLED,
+    flag = "autoRouteLoop",
+    callback = function(state)
+        setEnabled(state)
+    end,
+}
+
+if type(MainTab.ToggleButton) == "function" then
+    routeToggleControl = MainTab:ToggleButton(toggleOptions)
+elseif type(MainTab.Toggle) == "function" then
+    routeToggleControl = MainTab:Toggle(toggleOptions)
+else
+    routeWarn("No ToggleButton/Toggle method found in UI library.")
+end
+
+--// Runtime reconnect watcher
+characterAddedConnection = LocalPlayer.CharacterAdded:Connect(function()
+    routeToken += 1
+    currentCharacter = nil
+    routeRunning = false
+    routeCompleted = false
+    lastCharacterForPosition = nil
+    lastCharacterPosition = nil
+
+    stopMove()
+    stopNoclip()
+    stopHumanoidDiedConnection()
+
+    task.delay(0.25, function()
+        if enabled then
+            forceReconnectStart()
+        end
+    end)
+end)
+
+characterChangedConnection = LocalPlayer:GetPropertyChangedSignal("Character"):Connect(function()
+    routeToken += 1
+    currentCharacter = nil
+    routeRunning = false
+    routeCompleted = false
+    lastCharacterForPosition = nil
+    lastCharacterPosition = nil
+
+    stopMove()
+    stopNoclip()
+    stopHumanoidDiedConnection()
+
+    task.delay(0.25, function()
+        if enabled then
+            forceReconnectStart()
+        end
+    end)
+end)
+
+autoReconnectConnection = RunService.Heartbeat:Connect(function()
+    if not enabled then return end
+
+    local now = os.clock()
+    if now - lastReconnectCheck < AUTO_RECONNECT_INTERVAL then return end
+    lastReconnectCheck = now
+
+    forceReconnectStart()
+end)
+
+Controller.Destroy = function()
+    enabled = false
+    fullStop()
+
+    if characterAddedConnection then
+        characterAddedConnection:Disconnect()
+        characterAddedConnection = nil
+    end
+
+    if characterChangedConnection then
+        characterChangedConnection:Disconnect()
+        characterChangedConnection = nil
+    end
+
+    if autoReconnectConnection then
+        autoReconnectConnection:Disconnect()
+        autoReconnectConnection = nil
+    end
+end
+
+--// Start if toggle default is ON
+setEnabled(DEFAULT_ROUTE_ENABLED)
